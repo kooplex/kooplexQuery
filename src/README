@@ -1,0 +1,1 @@
+python cli.py query -r -q "How many non-VOC samples contained the G28881A mutation on 2023-03-15 over the databases?" 
