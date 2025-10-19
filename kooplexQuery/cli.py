@@ -7,7 +7,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def init_motor():
-    from motor import Motor
+    from kooplexQuery.motor import Motor
     logger.info(f"Initialize motor")
     return Motor(table_name_filter='viralprimer_%')
 

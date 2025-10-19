@@ -132,6 +132,60 @@ LIMIT :limit
             r = con.execute(q, {'limit': limit}).fetchall()
             return r
 
+    def fetch_all_examples(self):
+        q = text("""
+select *
+from chat.question q
+join chat.query a
+on q.id=a.question_id;
+        """)
+        with self.engine.connect() as con:
+            result = con.execute(q)
+            keys = result.keys()  # <-- This gives you the column names
+            data = result.fetchall()
+            return keys, data
+    
+    def delete_row(self, question_id):
+        with self.engine.begin() as con:
+            # Step 1: Delete from child table first (chat.query)
+            con.execute(text(f"""
+                DELETE FROM chat.query
+                WHERE question_id = {question_id}
+            """))
+        
+            # Step 2: Delete from parent table (chat.question)
+            con.execute(text(f"""
+                DELETE FROM chat.question
+                WHERE id = {question_id}  """))
+        return True
+
+    def validate_question(self, question_id):
+        """ 
+        After an expert overviewed the question and the corresponding results
+        it adds this row to the training set, makes it public and adds 1 to the overall score
+        A next validation eill further increase it's score
+        """
+        with self.engine.begin() as con:
+            con.execute(text("""
+                    UPDATE chat.query
+                    SET 
+                        score = :score
+                    WHERE question_id = :question_id
+                """), {
+                    'score': 1,
+                    'question_id': question_id
+                })
+            con.execute(text("""
+                    UPDATE chat.question
+                    SET type = :type,
+                        public = :public
+                    WHERE id = :question_id
+                """), {
+                    'type': 'train',
+                    'public': True,
+                    'question_id': question_id
+                })
+        return True
 
 if __name__ == '__main__':
     import os

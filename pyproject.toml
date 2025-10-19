@@ -3,8 +3,44 @@ name = "kooplexquery"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10.1"
+requires-python = ">=3.12.1"
 dependencies = [
+    "chromadb>=1.1.1",
+    "langchain>=0.3.27",
+    "langchain-chroma>=0.2.6",
+    "langchain-community>=0.3.31",
+    "langchain-core>=0.3.79",
+    "langchain-experimental>=0.3.4",
+    "langchain-ollama>=0.3.10",
+    "langchain-openai>=0.3.35",
     "pandas>=2.3.3",
+    "psycopg2>=2.9.11",
+    "python-dotenv>=1.1.1",
     "sqlalchemy>=2.0.44",
+    "streamlit-elements>=0.1.0",
+    "streamlit-extras>=0.7.8",
 ]
+
+
+[tool]
+description = "A command-line application for querying and managing data."
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.poetry.scripts]
+kooplexquery = "kooplexquery.prompt"
+#sqlvalidator = "sqlValidator.sql_validator_app"
+
+[tool.setuptools.packages.find]
+include = ["kooplexQuery*"]
+exclude = ["src_archived*", "sqlValidator*"]
+
+[project.scripts]
+kooplexquery = "kooplexQuery.prompt:main"
+#sqlvalidator = "sqlValidator.sql_validator_app:main"

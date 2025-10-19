@@ -4,8 +4,8 @@ import os
 from typing import Iterator, List, Dict, Any
 import logging
 import re
-from db_chat import DBChat
-from db import DBQuery
+from kooplexQuery.db_chat import DBChat
+from kooplexQuery.db import DBQuery
 
 logger = logging.getLogger(__name__)
 _ge = lambda x,d: os.getenv(x, d)
@@ -21,9 +21,9 @@ class Content_Chunk:
     content: str
 
 supported_models=[
+    LLM_Model('ollama', 'qwen2.5-coder:14b'),
     LLM_Model('ollama', 'llama3.1'),
     LLM_Model('ollama', 'qwen2.5-coder:3b'),
-    LLM_Model('ollama', 'qwen2.5-coder:14b'),
     LLM_Model('vllm', 'Qwen/Qwen2.5-coder-3b'),
     LLM_Model('ollama', 'qwen2.5-coder:7b'),
 #    LLM_Model('openai', 'gpt-3.5-turbo', None),
@@ -110,7 +110,7 @@ class Motor(object):
         import chromadb
         import random
         import pandas as pd
-        from history import CustomChatHistory
+        from kooplexQuery.history import CustomChatHistory
         pd.set_option('display.max_columns', None)
         pd.set_option('display.max_rows', None)
         label=label or random.randbytes(16)
@@ -156,7 +156,7 @@ Database Schema: {dbschema}
             self.sql=sql
 
 
-    async def chat(self, prompt, model_name='llama3.1'):
+    async def chat(self, prompt, model_name='qwen2.5-coder:14b'):
         t0=time.time()
         self.current_model=model_name
         self._chat_history.add_user_message(prompt, metadata={'timestamp': t0, 'model': self.current_model })
@@ -168,7 +168,7 @@ Database Schema: {dbschema}
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
         self.db_chat.save_chat_item(self.session_id, prompt, collected, self.current_model)
 
-    async def correct_error(self, error, model_name='llama3.1'):
+    async def correct_error(self, error, model_name='qwen2.5-coder:14b'):
         detail=getattr(error, 'orig', None)
         statement=getattr(error, 'statement', None)
         prompt = f"Correct the SQL query\n{statement}\nbecause: {detail}"
@@ -182,7 +182,7 @@ Database Schema: {dbschema}
                 yield c
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
 
-    async def plot(self, instruction_prompt, model_name='qwen2.5-coder:3b'):
+    async def plot(self, instruction_prompt, model_name='qwen2.5-coder:14b'):
         if self.df is not None:
             t0=time.time()
             self.current_model=model_name
@@ -229,7 +229,7 @@ User instructions for plotting: {instruction_prompt}
                 logger.error(e)
                 self._chat_history.add_ai_message(str(e), metadata={'content': e, 'type': 'error', 'code': code, 'duration': duration})
 
-    async def prepare_save(self, model_name='llama3.1'):
+    async def prepare_save(self, model_name='qwen2.5-coder:14b'):
         # Function to generate a the real question based on the chat history the SQL response
         h=[]
         for r in self.chat_history.filter(['plot']):
