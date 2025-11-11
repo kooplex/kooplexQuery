@@ -3,28 +3,65 @@ from __future__ import annotations
 
 import os
 import logging
+import importlib.metadata
+import sys, platform
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal, Any, Dict, List
+from textwrap import dedent
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
+from pathlib import Path
 
-
-try:
-    from db import DBQuery
-except:
-    DBQuery = None
 
 
 # ---- load env and logging ----------------------------------------------------
 load_dotenv()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mcp server")
 logging.basicConfig(
-    level=logging.INFO,
+#    stream=sys.stderr,
+    level=os.getenv("LOGLEVEL", "INFO"),
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+logging.info("MCP %s | Python %s | %s", importlib.metadata.version("mcp"), sys.version.split()[0], platform.platform())
+
+#try:
+#    from .db import DBQuery
+#except:
+#    logging.critical("cannot import DBQuery")
+#    DBQuery = None
+# Helpful breadcrumbs while debugging:
+logging.debug("SERVER start: file=%s", __file__)
+logging.debug("initial sys.path[0]=%s", sys.path[0])
+
+DBQ_IMPORT_ERR = None
+try:
+    # Case A: launched as a module (python -m mcp_server.entry)
+    from .db import DBQuery  # package-relative
+    logging.debug("Imported DBQuery via relative import (.db)")
+except Exception as e1:
+    DBQ_IMPORT_ERR = e1
+    try:
+        # Case B: repo root on PYTHONPATH (from client)
+        from mcp_server.db import DBQuery  # absolute package import
+        logging.debug("Imported DBQuery via absolute import (mcp_server.db)")
+    except Exception as e2:
+        try:
+            # Case C: launched by file path (mcp dev entry.py), no package context
+            here = Path(__file__).resolve().parent
+            sys.path.insert(0, str(here))  # add server directory itself
+            from db import DBQuery  # plain module import in same folder
+            logging.debug("Imported DBQuery via local module import (db)")
+        except Exception as e3:
+            logging.exception(
+                "Failed to import DBQuery. "
+                "Errors were:\n - relative: %r\n - absolute: %r\n - local: %r",
+                DBQ_IMPORT_ERR, e2, e3
+            )
+            raise  # stop early; don’t run without DBQuery
+# ---- end shim ----
 
 
 # ---- MCP app setup with DI and lifecycle ------------------------------------
@@ -52,12 +89,14 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppCtx]:
         try:
             db = DBQuery(dsn, PG_SCHEMA, timeout_s=30)
             await db.connect()
-            logger.info("DB context prepared")
+            logger.debug("DB context prepared")
         except Exception:
             logger.exception("DB init failed; continuing without DB")
 
     try:
         #yield AppCtx(db=db)
+        logger.debug("STARTUP dbq=%s pool=%s id(dbq)=%s id(pool)=%s",
+            db, getattr(db, "_pool", None), id(db), id(getattr(db, "_pool", None)))
         yield {"db": db}
     finally:
         # Clean shutdown
@@ -208,6 +247,41 @@ async def ddl_extract(ctx: Context, payload: DDLInput) -> DDLOutput:
     except Exception as e:
         await ctx.error(f"DDL extract failed: {e!r}")
         return DDLOutput(result={"error": str(e)})
+
+##### ---- Resources ---------------------------------------------------------------
+@mcp.resource("doc://viralprimer")
+def viralprimer_doc() -> str:
+    """
+    Comprehensive resources for monitoring SARS-CoV-2 primer efficiency: 
+    mutation datasets and the ViralPrimer web server
+    """
+    resource_path = Path(__file__).parent / "resources" / "viralprimer_description.txt"
+    try:
+        return resource_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"[Error loading resource: {e}]"
+
+# good to know we could do it dynamically
+#for path in Path("resources").glob("*.txt"):
+#    @mcp.resource(path.stem)
+#    def make_resource(ctx: Context, p=path):
+#        return p.read_text(encoding="utf-8")
+
+
+##### ---- Prompts -----------------------------------------------------------------
+@mcp.prompt("sql_generation")
+#def sql_generation_prompt() -> list[PromptMessage]:
+def sql_generation_prompt() -> str:
+    """
+    You are a SQL expert. Generate PostgreSQL queries against the given schema.
+    Use explicit schema qualification and only read data.
+    """
+    return dedent("""
+        You are a SQL expert. Generate PostgreSQL queries against the given schema.
+        - Use explicit schema qualification.
+        - Read-only: do not modify data (no INSERT/UPDATE/DELETE/DDL).
+        - Prefer JOINs on primary/foreign keys. Return concise queries.
+    """).strip()
 
 
 ##### ---- Entrypoint --------------------------------------------------------------
