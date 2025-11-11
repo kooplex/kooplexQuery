@@ -370,6 +370,9 @@ async def build_ollama_resources(from_mcp_list_resources) -> Tuple[List[dict], D
 
 
 def dump_messages(dumpfile: str, messages: list) -> None:
+    if not dumpfile:
+        return
+    log.debug(f"dumping conversation to {dumpfile}")
     with open(dumpfile, 'w') as f:
         t0=None
         for m in messages:
@@ -443,6 +446,7 @@ def main():
     else:
         q=args.question
     model=models[args.model][0]
+    log.info(f"Selected model: {model}")
     
 
     async def run_once(model: str, user_prompt: str) -> list:
