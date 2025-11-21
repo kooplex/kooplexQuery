@@ -239,7 +239,8 @@ def prompt():
 
     # Page render logic
     with st.sidebar:
-        st.title('Viralprimer GPT')
+        page_title = os.getenv("TITLE", "SQL GPT")
+        st.title(page_title)
         if st.button("Schema browser", width='stretch'):
             show_schema_browser()
         if st.button("New Session", width='stretch', disabled=st.session_state.motor.chat_history.is_empty):

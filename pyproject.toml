@@ -6,13 +6,17 @@ readme = "README.md"
 requires-python = ">=3.12.1"
 dependencies = [
     "chromadb>=1.1.1",
-    "langchain>=0.3.27",
-    "langchain-chroma>=0.2.6",
-    "langchain-community>=0.3.31",
-    "langchain-core>=0.3.79",
-    "langchain-experimental>=0.3.4",
-    "langchain-ollama>=0.3.10",
-    "langchain-openai>=0.3.35",
+    "gpt4all>=2.8.2",
+    "ipykernel>=7.1.0",
+    "langchain>=1.0.0",
+    "langchain-chroma",
+    "langchain-community",
+    "langchain-core",
+    "langchain-experimental",
+    "langchain-mcp-adapters>=0.1.13",
+    "langchain-ollama",
+    "langchain-openai",
+    "langchain-text-splitters>=1.0.0",
     "pandas>=2.3.3",
     "psycopg2>=2.9.11",
     "python-dotenv>=1.1.1",
@@ -38,7 +42,7 @@ kooplexquery = "kooplexquery.prompt"
 #sqlvalidator = "sqlValidator.sql_validator_app"
 
 [tool.setuptools.packages.find]
-include = ["kooplexQuery*"]
+include = ["kooplexQuery*", "utils*"]
 exclude = ["src_archived*", "sqlValidator*"]
 
 [project.scripts]
