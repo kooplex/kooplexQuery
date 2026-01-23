@@ -135,8 +135,8 @@ LIMIT :limit
     def fetch_all_examples(self):
         q = text("""
 select *
-from chat.question q
-join chat.query a
+from question q
+join query a
 on q.id=a.question_id;
         """)
         with self.engine.connect() as con:
