@@ -111,6 +111,8 @@ class Motor(object):
         import random
         import pandas as pd
         from kooplexQuery.history import CustomChatHistory
+        # from kooplexQuery import history
+
         pd.set_option('display.max_columns', None)
         pd.set_option('display.max_rows', None)
         label=label or random.randbytes(16)

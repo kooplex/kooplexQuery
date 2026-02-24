@@ -1,5 +1,5 @@
-from langchain.memory.chat_memory import BaseChatMessageHistory
-from langchain.schema import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_classic.memory.chat_memory import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from typing import Iterator, List, Dict, Any
 
 class MessageWithMeta:

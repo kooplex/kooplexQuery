@@ -2,10 +2,14 @@ from sqlalchemy import create_engine, text
 from pandas import pandas
 
 class DBQuery(object):
-    def __init__(self, hostname, port, database, schema, db_user, db_password):
-        connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
-        self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
-        self.schema=schema
+    def __init__(self, hostname, port, database, schema, db_user, db_password, db_type="postgres"):
+        if db_type=="postgres":
+            connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
+            self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+            self.schema=schema
+        elif db_type=="mssql":
+            connectionstring = f"mssql+pymssql://{db_user}:{db_password}@}@{hostname}:{port}/{database}"
+            self.engine = create_engine(connectionstring)
 
     def query(self, sql, subst={}):
         with self.engine.connect() as con:
