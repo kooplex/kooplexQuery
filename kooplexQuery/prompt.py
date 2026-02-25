@@ -12,8 +12,12 @@ import sys
 import os
 from pathlib import Path
 
-
+logging.basicConfig(
+    filename='/tmp/app.log', 
+    level=logging.DEBUG
+)
 logger = logging.getLogger(__name__)
+logger.debug("START")
 
 def prompt():
     # Set some session state defaults
@@ -365,6 +369,20 @@ def resolve_path(path=None):
 
 
 def main():
+    # # Generate self-signed certificates if they don't exist
+    # cert_dir = Path("/tmp/streamlit_certs")
+    # cert_dir.mkdir(exist_ok=True)
+    # cert_file = cert_dir / "cert.pem"
+    # key_file = cert_dir / "key.pem"
+    
+    # if not cert_file.exists() or not key_file.exists():
+    #     import subprocess
+    #     subprocess.run([
+    #         "openssl", "req", "-x509", "-newkey", "rsa:2048",
+    #         "-keyout", str(key_file), "-out", str(cert_file),
+    #         "-days", "365", "-nodes",
+    #         "-subj", "/CN=localhost"
+    #     ], check=True)
 
     sys.argv = [
         "streamlit",
@@ -374,8 +392,14 @@ def main():
         "--server.port=9000",
         "--server.baseUrlPath=notebook/report/wfct0p-dd/",
         "--server.address=0.0.0.0",
+        "--server.enableCORS false",
+        "--server.enableXsrfProtection false",
+        # "--server.sslCertFile=" + str(cert_file),
+        # "--server.sslKeyFile=" + str(key_file),
+        "--client.showErrorDetails=true",
+        "--logger.level=debug",
     ]
-    sys.exit(stcli.prompt())
+    sys.exit(stcli.main())
 
 
 # Uncomment to debug session_state

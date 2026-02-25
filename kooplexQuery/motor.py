@@ -7,6 +7,10 @@ import re
 from kooplexQuery.db_chat import DBChat
 from kooplexQuery.db import DBQuery
 
+logging.basicConfig(
+    filename='/tmp/app.log', 
+    level=logging.DEBUG
+)
 logger = logging.getLogger(__name__)
 _ge = lambda x,d: os.getenv(x, d)
 

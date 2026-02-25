@@ -8,7 +8,7 @@ class DBQuery(object):
             self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
             self.schema=schema
         elif db_type=="mssql":
-            connectionstring = f"mssql+pymssql://{db_user}:{db_password}@}@{hostname}:{port}/{database}"
+            connectionstring = f"mssql+pymssql://{db_user}:{db_password}@{hostname}:{port}/{database}"
             self.engine = create_engine(connectionstring)
 
     def query(self, sql, subst={}):
