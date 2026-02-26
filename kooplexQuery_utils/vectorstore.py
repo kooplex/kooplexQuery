@@ -257,11 +257,9 @@ if __name__ == '__main__':
     for e in examples:
         item = {'question':e[0], 'sql':e[1]}
         v.add_to_examples(item)
-    pp = "/v/projects/text2sql/david/Langchain_localllm/table_column_description.txt"
     # v.load_split_add_csv(pp)
     # print(vv.get_by_ids())
     # print(dir(vv))
-    pp = "/v/projects/text2sql/david/Langchain_localllm/sewage_data_descriptor.txt"
     # v.load_split_add_text(pp)
     # print(v.examples.get())
     # print(v.docs.get())

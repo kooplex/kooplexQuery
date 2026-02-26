@@ -45,7 +45,11 @@ supported_models=[
 class Motor(object):
     def __init__(self, table_name_filter=None):
         from dotenv import load_dotenv
-        load_dotenv("./config.env")
+        logger.debug(f"Current working directory: {os.getcwd()}")
+        config_path = os.path.join(os.getcwd(), "./config.env")
+        if not load_dotenv(config_path):
+            logger.warning(f"Failed to load config.env in this directory {os.getcwd()}. Make sure to have a config.env file with the required configuration or set environment variables directly.")
+            load_dotenv()
 
         self._table_name_filter=table_name_filter
         self.db_chat = self._dbchat_init()
@@ -279,6 +283,7 @@ User instructions for plotting: {instruction_prompt}
 
     # private methods
     def _dbchat_init(self) -> DBChat:
+        logger.debug(f"Initializing DBChat with host: {_ge('CHAT_HOST', 'localhost')}, port: {int(_ge('CHAT_PORT', 5432))}, database: {_ge('CHAT_DATABASE', 'sewage')}, schema: {_ge('CHAT_SCHEMA', 'chat')}, user: {_ge('CHAT_USER', 'chat_agent')}")
         return DBChat(
             hostname=_ge('CHAT_HOST', 'localhost'), port=int(_ge('CHAT_PORT', 5432)),
             database=_ge('CHAT_DATABASE', 'sewage'), schema=_ge('CHAT_SCHEMA', 'chat'),
@@ -287,6 +292,7 @@ User instructions for plotting: {instruction_prompt}
         )
 
     def _dbtarget_init(self) -> DBQuery:
+        logger.debug(f"Initializing DBQuery with host: {_ge('PG_HOST', 'localhost')}, port: {int(_ge('PG_PORT', 5432))}, database: {_ge('PG_DATABASE', 'sewage')}, schema: {_ge('PG_SCHEMA', 'distilled')}, user: {_ge('PG_USER', 'reader')}")
         return DBQuery(
             hostname=_ge('PG_HOST', 'localhost'), port=int(_ge('PG_PORT', 5432)),
             database=_ge('PG_DATABASE', 'sewage'), schema=_ge('PG_SCHEMA', 'distilled'),

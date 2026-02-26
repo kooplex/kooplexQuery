@@ -3,6 +3,7 @@ from streamlit_extras.chart_container import *
 import streamlit.components.v1 as components
 from streamlit_elements import html
 import streamlit.web.cli as stcli
+from pathlib import Path
 import logging
 import time
 from kooplexQuery.motor import Motor, supported_models
@@ -211,7 +212,8 @@ def prompt():
     if st.session_state.get('motor') is None:
         logger.info(f"Initialize motor")
         try:
-            st.session_state.motor = Motor(table_name_filter='viralprimer_%')
+            # st.session_state.motor = Motor(table_name_filter='viralprimer_%')
+            st.session_state.motor = Motor(table_name_filter='%')
         except Exception as e:
             st.error(e)
             st.stop()
@@ -369,36 +371,29 @@ def resolve_path(path=None):
 
 
 def main():
-    # # Generate self-signed certificates if they don't exist
-    # cert_dir = Path("/tmp/streamlit_certs")
-    # cert_dir.mkdir(exist_ok=True)
-    # cert_file = cert_dir / "cert.pem"
-    # key_file = cert_dir / "key.pem"
-    
-    # if not cert_file.exists() or not key_file.exists():
-    #     import subprocess
-    #     subprocess.run([
-    #         "openssl", "req", "-x509", "-newkey", "rsa:2048",
-    #         "-keyout", str(key_file), "-out", str(cert_file),
-    #         "-days", "365", "-nodes",
-    #         "-subj", "/CN=localhost"
-    #     ], check=True)
+    import kooplexQuery.prompt as prompt_module
+    script_path = Path(prompt_module.__file__).resolve()
 
-    sys.argv = [
+    # 2. Define the Streamlit arguments
+    # Note: baseUrlPath should NOT have leading/trailing slashes
+    base_path = "notebook/report/wfct0p-dd"
+
+    args = [
         "streamlit",
         "run",
-        resolve_path(),
-        "--global.developmentMode=false",
+        str(script_path),
         "--server.port=9000",
-        "--server.baseUrlPath=notebook/report/wfct0p-dd/",
         "--server.address=0.0.0.0",
-        "--server.enableCORS false",
-        "--server.enableXsrfProtection false",
-        # "--server.sslCertFile=" + str(cert_file),
-        # "--server.sslKeyFile=" + str(key_file),
+        "--server.baseUrlPath=" + base_path,
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
+        "--server.enableWebsocketCompression=false",
+        "--browser.gatherUsageStats=false",
+        "--server.headless=true",
         "--client.showErrorDetails=true",
-        "--logger.level=debug",
     ]
+
+    sys.argv = args
     sys.exit(stcli.main())
 
 
@@ -407,6 +402,7 @@ def main():
 
 
 if __name__ == '__main__':
+    print("Starting the application...")
     prompt()
 
     
