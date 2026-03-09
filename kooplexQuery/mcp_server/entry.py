@@ -73,12 +73,12 @@ except Exception as e1:
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[AppCtx]:
     # Build DSN from env
-    PG_HOST=os.getenv('PG_HOST', 'localhost')
-    PG_PORT=os.getenv('PG_PORT', 5432)
-    PG_USER=os.getenv('PG_USER')
-    PG_PASSWORD=os.getenv('PG_PASSWORD', '')
-    PG_DATABASE=os.getenv('PG_DATABASE', '')
-    PG_SCHEMA=os.getenv('PG_SCHEMA', 'public')
+    PG_HOST=os.getenv('DB_HOST', 'localhost')
+    PG_PORT=os.getenv('DB_PORT', 5432)
+    PG_USER=os.getenv('DB_USER')
+    PG_PASSWORD=os.getenv('DB_PASSWORD', '')
+    PG_DATABASE=os.getenv('DB_DATABASE', '')
+    PG_SCHEMA=os.getenv('DB_SCHEMA', 'public')
     dsn = f"postgresql://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}"
     # Mask password in logs
     safe_dsn = dsn.replace(PG_PASSWORD, "****") if PG_PASSWORD else dsn

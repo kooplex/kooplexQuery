@@ -13,13 +13,23 @@ class DBQuery(object):
 
     def query(self, sql, subst={}):
         with self.engine.connect() as con:
-            return con.execute(text(sql), subst)
+            if self.engine.dialect.name == 'postgresql':
+                return con.execute(text(sql), subst)
+            elif self.engine.dialect.name == 'mssql':
+                cursor = con.exec_driver_sql(sql)
+                return cursor
 
     def query_to_df(self, sql, subst={}):
         with self.engine.connect() as con:
             return pandas.DataFrame(con.execute(text(sql), subst))
 
     def describe_tables(self, table_name_like = None):
+        if self.engine.dialect.name == 'postgresql':
+            return self.describe_tables_postgres(table_name_like)
+        elif self.engine.dialect.name == 'mssql':
+            return self.describe_tables_mssql(table_name_like)
+
+    def describe_tables_postgres(self, table_name_like = None):
         if table_name_like:
             q="""
 SELECT c.relname AS table_name, obj_description(c.oid) AS table_comment
@@ -40,7 +50,31 @@ ORDER BY c.relname;
             r=self.query(q, {'schema': self.schema})
         return r.fetchall()
 
+    def describe_tables_mssql(self, table_name_like = None):
+        # MSSQL: list user tables and views in a schema, including optional description
+        # Uses extended properties for table comments (MS_Description)
+    
+        q="""
+SELECT o.name AS table_name,
+       ep.value AS table_comment
+FROM sys.objects o
+LEFT JOIN sys.extended_properties ep
+  ON ep.major_id = o.object_id
+  AND ep.minor_id = 0
+  AND ep.name = 'MS_Description'
+WHERE o.type IN ('U', 'V')
+ORDER BY o.name;
+            """
+        r=self.query(q)
+        return r.fetchall()
+
     def describe_columns(self, table_name_like = None):
+        if self.engine.dialect.name == 'postgresql':
+            return self.describe_columns_postgres(table_name_like)
+        elif self.engine.dialect.name == 'mssql':
+            return self.describe_columns_mssql(table_name_like)
+        
+    def describe_columns_postgres(self, table_name_like = None):
         if table_name_like:
             q="""
 SELECT c.relname AS table_name, a.attname AS column_name, col_description(a.attrelid, a.attnum) AS description, pg_catalog.format_type(a.atttypid, a.atttypmod) AS datatype
@@ -61,6 +95,17 @@ WHERE c.relkind in ('r', 'v') AND n.nspname = :schema AND a.attnum > 0 AND NOT a
 ORDER BY c.relname, a.attnum;
             """
             r=self.query(q, {'schema': self.schema})
+        return r.fetchall()
+
+    def describe_columns_mssql(self, table_name_like = None):
+        q="""
+SELECT *
+FROM sys.objects o
+JOIN sys.columns c ON c.object_id = o.object_id
+WHERE o.type IN ('U', 'V')
+ORDER BY o.name, c.column_id;
+            """
+        r=self.query(q)
         return r.fetchall()
 
     @staticmethod

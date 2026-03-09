@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 logging.basicConfig(
-    filename='/tmp/app.log', 
+    filename='./app.log', 
     level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
@@ -267,18 +267,21 @@ def prompt():
     # The page body
     def show_examples(n_examples=3):
         if st.session_state.motor.chat_history.is_empty:
-            with example_container.container():
-                with st.form("example_form"):
-                    st.markdown("##### _Example questions_")
-                    cols = st.columns(n_examples)
-                    def _s(prompt, sql):
-                        st.session_state.motor.select_example(prompt, sql)
-                        st.session_state.rerun=True
-            
-                    for i, (_prompt, _sql) in enumerate(st.session_state.motor.fetch_examples(n_examples)):
-                        cols[i].form_submit_button(_prompt, type="secondary", on_click=_s, args=[_prompt, _sql])
-        else:
-            example_container.empty()
+            # Check if there are examples available and show them only if there are and we are at the start of the session
+            if st.session_state.motor.fetch_examples(1):
+                with example_container.container():
+                    with st.form("example_form"):
+                        st.markdown("##### _Example questions_")
+                        cols = st.columns(n_examples)
+                        def _s(prompt, sql):
+                            st.session_state.motor.select_example(prompt, sql)
+                            st.session_state.rerun=True
+                
+                        for i, (_prompt, _sql) in enumerate(st.session_state.motor.fetch_examples(n_examples)):
+                            cols[i].form_submit_button(_prompt, type="secondary", on_click=_s, args=[_prompt, _sql])
+            else:
+                with example_container.container():
+                        st.markdown("##### _There are no example questions yet_")
 
     show_examples()
     if st.session_state.rerun:
@@ -296,6 +299,8 @@ def prompt():
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("💾 Save", disabled=not st.session_state.motor.can_save):
+                        logger.info(f"Query saved: {st.session_state.sql_saved}")
+
                         st.session_state.sql_saved=st.session_state.motor.sql
                         st.session_state.motor.save_query()
                         st.rerun()
@@ -362,6 +367,8 @@ def prompt():
         st.session_state.latest_user_input = None
         st.rerun()
 
+    logger.debug("END ----")
+    logger.info(f"Session {st.session_state.motor.chat_history} - End of prompt function")
 
 def resolve_path(path=None):
     here = Path(__file__).resolve()
@@ -376,13 +383,24 @@ def main():
 
     # 2. Define the Streamlit arguments
     # Note: baseUrlPath should NOT have leading/trailing slashes
-    base_path = "notebook/report/wfct0p-dd"
+
+    # Import environment variables from .env file if it exists
+    import os
+    _ge = lambda x,d: os.getenv(x, d)
+
+    from dotenv import load_dotenv
+    if not load_dotenv():
+        load_dotenv("config.env")
+
+    base_path = _ge("REPORT_URL", "kooplex-query")
+    base_path = base_path.strip("/")
+    port = _ge("REPORT_PORT", "9000")
 
     args = [
         "streamlit",
         "run",
         str(script_path),
-        "--server.port=9000",
+        "--server.port=" + port,
         "--server.address=0.0.0.0",
         "--server.baseUrlPath=" + base_path,
         "--server.enableCORS=false",

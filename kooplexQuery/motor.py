@@ -25,14 +25,13 @@ class Content_Chunk:
     content: str
 
 supported_models=[
+    LLM_Model('openai', 'gpt-4.1-mini'),
+    LLM_Model('openai', 'gpt-5.1-mini'),
     LLM_Model('ollama', 'qwen2.5-coder:14b'),
     LLM_Model('ollama', 'llama3.1'),
     LLM_Model('ollama', 'qwen2.5-coder:3b'),
     LLM_Model('vllm', 'Qwen/Qwen2.5-coder-3b'),
     LLM_Model('ollama', 'qwen2.5-coder:7b'),
-#    LLM_Model('openai', 'gpt-3.5-turbo', None),
-#    LLM_Model('openai', 'gpt-4.1-mini', None),
-#    LLM_Model('openai', 'gpt-4.1', None),
     LLM_Model('ollama', 'hf.co/defog/sqlcoder-6b-2:Q5_K_M'),
 ]
 
@@ -66,15 +65,20 @@ class Motor(object):
     @current_model.setter
     def current_model(self, model_name):
         if self.current_model!=model_name:
-            #from langchain_community.chat_models import ChatOpenAI
             from langchain_openai import ChatOpenAI
             logger.info (f"Changed to model {model_name}")
-            _h=_ge("OLLAMA_HOST", "localhost")
-            _p=int(_ge("OLLAMA_PORT", 11434))
-            self._model=model_name
-            self._llm_agent = ChatOpenAI(
-                    temperature=0, openai_api_key="fdsfs", streaming=True, 
-                    model_name=model_name, openai_api_base=f"http://{_h}:{_p}/v1")
+            # Distinguish between openai and ollama models based on the name
+            if model_name.startswith('gpt-'):
+                self._model=model_name
+                self._llm_agent = ChatOpenAI(
+                    temperature=0, openai_api_key=_ge("OPENAI_API_KEY", "fdsfs"), streaming=True, model_name=model_name)
+            else:
+                _h=_ge("OLLAMA_HOST", "localhost")
+                _p=int(_ge("OLLAMA_PORT", 11434))
+                self._model=model_name
+                self._llm_agent = ChatOpenAI(
+                        temperature=0, openai_api_key="fdsfs", streaming=True, 
+                        model_name=model_name, openai_api_base=f"http://{_h}:{_p}/v1")
 
     @property
     def sql(self):
@@ -137,8 +141,12 @@ class Motor(object):
 
 Database Schema: {dbschema}
         """
-        self._chat_history=CustomChatHistory(context)
+        self._chat_history=CustomChatHistory()
+        self._chat_history.add_system_message(context)
         self._chat_history.add_system_message(self.db_chat.load_knowledge(reference='instruction'))
+        # In case the chat db was not properly initialized and there are no instructions, we add a default one
+        if len(self._chat_history.messages)==1:
+            self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
         self._plot_history=CustomChatHistory()
         self._plot_history.add_system_message("You are a helper to create plots")
         chromadb.api.client.SharedSystemClient.clear_system_cache() #TODO test if really required parrallel runs
@@ -252,7 +260,7 @@ User instructions for plotting: {instruction_prompt}
         Just provide the question without any extra explanation.
         """
 #logger.info(f"Generating THE question with: {prompt}")
-        self.current_model=model_name
+        # self.current_model=model_name
         collected=""
         async for chunk in self._llm_agent.astream(prompt):
             if c:=chunk.content:
@@ -270,35 +278,54 @@ User instructions for plotting: {instruction_prompt}
             t0=time.time()
             df=self.db_source.query_to_df(sql)
             self.df=df
-            self._chat_history.add_ai_message(df.head().to_string(), metadata={'type': 'dataframe', 'dataframe': df, 'query': sql, 'duration': time.time()-t0})
+            # self._chat_history.add_ai_message(df.head().to_string(), metadata={'type': 'dataframe', 'dataframe': df, 'query': sql, 'duration': time.time()-t0})
+            # Limit stored text to ~5KB to avoid memory/token explosion
+            table_text = df.to_string(max_rows=100, max_cols=20)
+            max_len = 5 * 1024
+            if len(table_text) > max_len:
+                table_text = table_text[:max_len-24] + "\n... [truncated]"
+                # FIXME Maybe add an extra sentence noting that the table was truncated and that the full table is available in the dataframe attached to the message metadata
+            self._chat_history.add_ai_message(
+                table_text,
+                metadata={'type': 'dataframe', 'dataframe': df, 'query': sql, 'duration': time.time()-t0}
+            )
+
         except Exception as e:
             self._chat_history.add_ai_message(str(e), metadata={'type': 'error', 'content': e, 'query': sql})
             self._error=e
             self.sql=None
 
     def save_query(self):
-        print("Saving")
+        logger.info(f"Saving query with question: {self.question} and sql: {self.sql}")
         self.db_chat.save_query(self.session_id, self.question, self.sql, question_type = 'user', public = False)
         self._question=None
 
     # private methods
-    def _dbchat_init(self) -> DBChat:
-        logger.debug(f"Initializing DBChat with host: {_ge('CHAT_HOST', 'localhost')}, port: {int(_ge('CHAT_PORT', 5432))}, database: {_ge('CHAT_DATABASE', 'sewage')}, schema: {_ge('CHAT_SCHEMA', 'chat')}, user: {_ge('CHAT_USER', 'chat_agent')}")
-        return DBChat(
-            hostname=_ge('CHAT_HOST', 'localhost'), port=int(_ge('CHAT_PORT', 5432)),
-            database=_ge('CHAT_DATABASE', 'sewage'), schema=_ge('CHAT_SCHEMA', 'chat'),
-            db_user=_ge('CHAT_USER', 'chat_agent'),
-            db_password=_ge('CHAT_PASSWORD', ''), generated_callback=lambda c: None
-        )
+    def _dbchat_init(self, db_config: dict = {}) -> DBChat:
+        if db_config:
+            logger.debug(f"Initializing DBChat with provided db_config: {db_config}")
+            return DBChat(**db_config, generated_callback=lambda c: None)
+        else:
+            logger.debug(f"Initializing DBChat with host: {_ge('CHAT_HOST', 'localhost')}, port: {int(_ge('CHAT_PORT', 5432))}, database: {_ge('CHAT_DATABASE', 'sewage')}, schema: {_ge('CHAT_SCHEMA', 'chat')}, user: {_ge('CHAT_USER', 'chat_agent')}")
+            return DBChat(
+                hostname=_ge('CHAT_HOST', 'localhost'), port=int(_ge('CHAT_PORT', 5432)),
+                database=_ge('CHAT_DATABASE', 'sewage'), schema=_ge('CHAT_SCHEMA', 'chat'),
+                db_user=_ge('CHAT_USER', 'chat_agent'),
+                db_password=_ge('CHAT_PASSWORD', ''), generated_callback=lambda c: None
+            )
 
-    def _dbtarget_init(self) -> DBQuery:
-        logger.debug(f"Initializing DBQuery with host: {_ge('PG_HOST', 'localhost')}, port: {int(_ge('PG_PORT', 5432))}, database: {_ge('PG_DATABASE', 'sewage')}, schema: {_ge('PG_SCHEMA', 'distilled')}, user: {_ge('PG_USER', 'reader')}")
-        return DBQuery(
-            hostname=_ge('PG_HOST', 'localhost'), port=int(_ge('PG_PORT', 5432)),
-            database=_ge('PG_DATABASE', 'sewage'), schema=_ge('PG_SCHEMA', 'distilled'),
-            db_user=_ge('PG_USER', 'reader'),
-            db_password=_ge('PG_PASSWORD', '')
-        )
+    def _dbtarget_init(self, db_config: dict = {}) -> DBQuery:
+        if db_config:
+            logger.debug(f"Initializing DBQuery with provided db_config: {db_config}")
+            return DBQuery(**db_config)
+        else:
+            logger.debug(f"Initializing DBQuery with host: {_ge('DB_HOST', 'localhost')}, port: {int(_ge('DB_PORT', 5432))}, database: {_ge('DB_DATABASE', 'sewage')}, schema: {_ge('DB_SCHEMA', 'distilled')}, user: {_ge('DB_USER', 'reader')}")
+            return DBQuery(
+                hostname=_ge('DB_HOST', 'localhost'), port=int(_ge('DB_PORT', 5432)),
+                database=_ge('DB_DATABASE', 'sewage'), schema=_ge('DB_SCHEMA', 'distilled'),
+                db_user=_ge('DB_USER', 'reader'),
+                db_password=_ge('DB_PASSWORD', ''), db_type=_ge('DB_TYPE', 'postgres')  
+            )
 
     def _parse_sql(self, content: str) -> [Content_Chunk]:
         rest=content

@@ -29,6 +29,18 @@ class CustomChatHistory(BaseChatMessageHistory):
         )
 
     def add_system_message(self, content: str, metadata: Dict = None):
+        # Guard against missing/None content (e.g., empty instruction entry in DB)
+        if content is None:
+            return
+        # Ensure we pass a string to the underlying message model
+        if not isinstance(content, str):
+            try:
+                content = str(content)
+            except Exception:
+                return
+        if content == "":
+            return
+
         self.messages_with_meta.append(
             MessageWithMeta(SystemMessage(content=content), metadata or {})
         )

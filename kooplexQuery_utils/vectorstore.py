@@ -10,22 +10,35 @@ logger = logging.getLogger(__name__)
 
 
 class VectorStore():
+    CollectionNames = {
+        "EXAMPLES": "examples",
+        "DOCS": "docs",
+        "ADVICES": "advices",
+        "SCHEMA": "schema"
+    }
+
     def __init__(self, persist_directory="./chroma_vector_db"):
     # def __init__(self):
         
         self.embeddings = None
 
         # self.persist_directory = persist_directory
-        self.vectorstore = None
-
+        # self.vectorstore = None
+        
         self.chroma_client = chromadb.PersistentClient(path=persist_directory)
         # self.chroma_client = chromadb.Client()
 
         self.example_selector = None 
         self.example_prompt = None
-        self.examples = self._init_db("examples")
-        self.docs = self._init_db("docs")
-        self.advices = self._init_db("advices")
+        self.examples = self._init_db(self.CollectionNames["EXAMPLES"])
+        self.docs = self._init_db(self.CollectionNames["DOCS"])
+        self.advices = self._init_db(self.CollectionNames["ADVICES"])
+        self.schema = self._init_db(self.CollectionNames["SCHEMA"])
+
+    def get_collections(self):
+        """ Get all collection names in the vectorstore.  """
+        # only user defined variables in CollectionNames class
+        return [col for col in self.CollectionNames.values()]
 
     def _init_db(self, collection_name, reset=False):
         # Init vectorstore if not already
@@ -48,6 +61,12 @@ class VectorStore():
                 )
 
             # # Init collection if not already
+            try:
+                c = self.chroma_client.create_collection(collection_name)
+            except:
+                logger.info(f"Collection {collection_name} already exists in DB")
+                pass
+
             # if not self.examples:
             #     c = self.chroma_client.get_or_create_collection(collection_name)
             #     if not c.count():
@@ -57,21 +76,24 @@ class VectorStore():
             #     logger.info(f"Collection {collection_name} found in DB")
             # except:
             #     pass
-
-            return Chroma(client=self.chroma_client, embedding_function=self.embeddings, collection_name=collection_name)
+            if collection_name in self.get_collections():
+                logger.info(f"Collection {collection_name} initialized in DB")
+                return Chroma(client=self.chroma_client, embedding_function=self.embeddings, collection_name=collection_name)
             # return self.chroma_client.get_or_create_collection( embedding_function=self.embeddings, name=collection_name)
             # return self.chroma_client.get_or_create_collection(name=collection_name)
     
     def _select_collection_by_name(self, collection_name):
         """ Select collection by name.  """
-        if collection_name == "examples":
+        if collection_name == self.CollectionNames["EXAMPLES"]:
             return self.examples
-        elif collection_name == "docs":
+        elif collection_name == self.CollectionNames["DOCS"]:
             return self.docs
-        elif collection_name == "advices":
+        elif collection_name == self.CollectionNames["ADVICES"]:
             return self.advices
+        elif collection_name == self.CollectionNames["SCHEMA"]:
+            return self.schema  
         else:
-            logger.error(f"Collection {collection_name} not found!")
+            logger.error(f"Collection {collection_name} not found! Available collections: {self.get_collections()}")
             return None
 
     def _check_similarity(self, text, collection):
@@ -89,52 +111,52 @@ class VectorStore():
     def add_to_examples(self, item):
         """ Check if item exists. Add item to collection.  """
 
-        self.examples = self._init_db("examples")   
+        self.examples = self._init_db(self.CollectionNames["EXAMPLES"])   
 
         texts = [f"{item['question']}"]
-        metadatas = [{"sql": item["sql"],  "question":item["question"], "type":"examples"}]
+        metadatas = [{"sql": item["sql"],  "question":item["question"], "type":self.CollectionNames["EXAMPLES"]}]
 
 
         if not self._check_similarity(texts[0], self.examples):
             self.examples.add_texts(texts = texts, metadatas=metadatas)
 
             # Make sure that there are no duplicates
-            logger.info(f"Added to examples")
+            logger.info(f"Added to {self.CollectionNames['EXAMPLES']} collection")
 
     def add_to_docs(self, item=None, texts="", metadatas=""):
         """ Check if item exists. Add item to docs.  """
 
-        self.docs = self._init_db("docs")   
+        self.docs = self._init_db(self.CollectionNames["DOCS"])   
 
         if item:
             texts = [f"{item['question']}"]
-            metadatas = [{"sql": item["sql"],  "question":item["question"], "type":"docs"}]
+            metadatas = [{"sql": item["sql"],  "question":item["question"], "type":self.CollectionNames["DOCS"]}]
 
         # Check similarity
         if not self._check_similarity(texts[0], self.docs):
             self.docs.add_texts(texts = texts, metadatas=metadatas)
 
             # Make sure that there are no duplicates
-            logger.info(f"Added to docs")
+            logger.info(f"Added to {self.CollectionNames['DOCS']} collection")
 
     def add_to_advices(self, item=None, texts="", metadatas=""):
         """ Check if item exists. Add item to advices.  """
 
-        self.advices = self._init_db("advices")   
+        self.advices = self._init_db(self.CollectionNames["ADVICES"])   
 
         if item:
             texts = [f"{item['advice']}"]
-            metadatas = [{"advice": item["advice"], "type":"advices"}]
+            metadatas = [{"advice": item["advice"], "type":self.CollectionNames["ADVICES"]}]
 
         # Check similarity
         if not self._check_similarity(texts[0], self.advices):
             self.advices.add_texts(texts = texts, metadatas=metadatas)
 
             # Make sure that there are no duplicates
-            logger.info(f"Added to advices")
+            logger.info(f"Added to {self.CollectionNames['ADVICES']} collection")
 
     # ADDITIONAL DOCUMENTATION
-    def load_split_add_csv(self, file_path, collection_name="docs", csv_args={'delimiter': '\t'}):
+    def load_split_add_csv(self, file_path, collection_name=None, csv_args={'delimiter': '\t'}):
         """
         Load the csv file and split it into chunks to be stored in the collection
         it's reference tag is <collection_name>
@@ -156,23 +178,30 @@ class VectorStore():
                 collection.add_texts(texts=[texts], metadatas=metadatas)
 
 
-    def load_split_add_text(self, data, collection_name="docs", split_on="\n", chunk_size=300):
+    def load_split_add_text(self, data, collection_name=None, split_on="\n", chunk_size=300):
         """
         Load the text file and split it into chunks to be stored in the collection
         it's reference tag is "docs"
         """
 
+        if not data:
+            logger.error("No data provided for loading into vector store.")
+            return
+        
         collection = self._select_collection_by_name(collection_name)
 
         # Load text
         metadatas=[{"type": collection_name}]
-        all_splits = data.split(split_on)
+        if isinstance(data, str):
+            all_splits = data.split(split_on)
+        else:
+            all_splits = data
         for idx, spl in enumerate(all_splits):
             texts = spl
             if not self._check_similarity(texts, collection):
                 collection.add_texts(texts=[texts], metadatas=metadatas)
 
-    def load_split_add_textfile(self, file_path, collection_name="docs", split_on=["\n"], chunk_size=300):
+    def load_split_add_textfile(self, file_path, collection_name=None, split_on=["\n"], chunk_size=300):
         from langchain_community.document_loaders import TextLoader
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -189,7 +218,7 @@ class VectorStore():
                 collection.add_texts(texts=[texts], metadatas=metadatas)
 
 
-    def retrieve_documents(self, collection_name=None, text="", threshold=0.05, top_k=30):
+    def retrieve_documents(self, collection_name=None, text="", threshold=0.05, top_k=30)-> str:
         """
             Retrieve the documents from the collection stored in the Vector DB
         """
