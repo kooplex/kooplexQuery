@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 logging.basicConfig(
-    filename='./app.log', 
+    filename='/tmp//app.log', 
     level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
@@ -249,7 +249,7 @@ def prompt():
         st.title(page_title)
         if st.button("Schema browser", width='stretch'):
             show_schema_browser()
-        if st.button("New Session", width='stretch', disabled=st.session_state.motor.chat_history.is_empty):
+        if st.button("New Session", width='stretch', disabled=st.session_state.motor.is_new_session):
             _newsession()
         st.toggle("Autocorrect", value=False, key="autocorrect", on_change=None, args=None, kwargs=None)
         selected_model=st.sidebar.selectbox(
@@ -266,7 +266,7 @@ def prompt():
 
     # The page body
     def show_examples(n_examples=3):
-        if st.session_state.motor.chat_history.is_empty:
+        if st.session_state.motor.is_new_session:
             # Check if there are examples available and show them only if there are and we are at the start of the session
             if st.session_state.motor.fetch_examples(1):
                 with example_container.container():
@@ -291,7 +291,6 @@ def prompt():
 
     # Save requested
     if st.session_state.save_req:
-        st.session_state.save_req=False
         with control_container.container():
             st.markdown("💡 Note: _An expert will validate this relation later._")
             with st.spinner("Digesting conversation..."):
@@ -303,9 +302,11 @@ def prompt():
 
                         st.session_state.sql_saved=st.session_state.motor.sql
                         st.session_state.motor.save_query()
+                        st.session_state.save_req=False
                         st.rerun()
                 with col2:
                     if st.button("❌ Cancel"):
+                        st.session_state.save_req=False
                         st.rerun()
 
     # Show success
@@ -368,7 +369,7 @@ def prompt():
         st.rerun()
 
     logger.debug("END ----")
-    logger.info(f"Session {st.session_state.motor.chat_history} - End of prompt function")
+    #logger.info(f"Session {st.session_state.motor.chat_history} - End of prompt function")
 
 def resolve_path(path=None):
     here = Path(__file__).resolve()

@@ -116,6 +116,10 @@ class Motor(object):
     def can_save(self):
         return self.question and self.sql
 
+    @property
+    def is_new_session(self):
+        # Check whether the chat history contains only the initial system message(s) and no user messages
+        return all(m.type=='system' for m in self._chat_history.messages) and not any(m.type=='user' for m in self._chat_history.messages)
 
     # public methods
     def new_session(self, username, email, label=None, referenced_session=None):
@@ -168,7 +172,7 @@ Database Schema: {dbschema}
         return self.db_chat.fetch_examples(n)
 
     def select_example(self, question, sql):
-        if self._chat_history.is_empty:
+        if self.is_new_session:
             self._chat_history.add_user_message(question, metadata={'type': 'example_question'})
             self._chat_history.add_ai_message(sql, metadata={'type': 'example_sql', 'parsed': [Content_Chunk('sql', sql)]})
             self.sql=sql
