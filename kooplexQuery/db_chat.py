@@ -3,9 +3,45 @@ from sqlalchemy import create_engine, text
 class DBChat(object):
     def __init__(self, hostname, port, database, schema, db_user, db_password, generated_callback=lambda c: None):
         connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
-        self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+        
         self.cb_generated = generated_callback
+        self.schema = schema
+        self.port = port
+        self.hostname = hostname
+        self.database = database
+        self.db_user = db_user
+        self.db_password = db_password
 
+        if not self._check_schema():
+            print(f"Schema {schema} does not exist. Creating schema and tables...")
+            self.create_schema()
+            self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+        else:
+            print(f"Schema {schema} exists. Ready to use.")
+
+        self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+        
+
+    def _check_schema(self):
+        import os
+        _ge = lambda x,d: os.getenv(x, d)
+        schema_manager = _ge('CHAT_SCHEMA_MANAGER', 'schema_manager')
+        schema_manager_password = _ge('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
+        
+        connectionstring = f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}@{self.hostname}:{self.port}/{self.database}"
+        engine = create_engine(connectionstring)
+        q = text("""
+SELECT schema_name
+FROM information_schema.schemata
+WHERE schema_name = :schema;
+        """)
+        try:
+            with engine.connect() as con:
+                r = con.execute(q, {'schema': self.schema}).scalar()
+                return r is not None
+        except Exception as e:
+            print(f"Error checking schema: {e}")
+            return False
 
     def _get_userid(self, username, email):
         with self.engine.connect() as con:
@@ -87,6 +123,9 @@ WHERE reference=:reference
         q = text("""
 INSERT INTO knowledge (reference, content)
 VALUES (:reference, :content)
+ON CONFLICT (reference) 
+DO UPDATE SET 
+    content = EXCLUDED.content
         """)
         #ON CONFLICT (reference) DO UPDATE SET content = EXCLUDED.content
         with self.engine.connect() as con:
@@ -166,15 +205,21 @@ on q.id=a.question_id;
     def delete_row(self, question_id):
         with self.engine.begin() as con:
             # Step 1: Delete from child table first (chat.query)
-            con.execute(text(f"""
-                DELETE FROM chat.query
-                WHERE question_id = {question_id}
-            """))
+            ddl = f"""
+DELETE FROM {self.schema}.query
+WHERE question_id = :question_id
+            """
+            con.execute(text(ddl), {
+                'question_id': question_id
+            })
         
             # Step 2: Delete from parent table (chat.question)
-            con.execute(text(f"""
-                DELETE FROM chat.question
-                WHERE id = {question_id}  """))
+            ddl = f"""
+DELETE FROM {self.schema}.question
+WHERE id = :question_id  """
+            con.execute(text(ddl), {
+                'question_id': question_id
+            })
         return True
 
     def validate_question(self, question_id):
@@ -184,26 +229,158 @@ on q.id=a.question_id;
         A next validation eill further increase it's score
         """
         with self.engine.begin() as con:
-            con.execute(text("""
-                    UPDATE chat.query
-                    SET 
-                        score = :score
-                    WHERE question_id = :question_id
-                """), {
+            ddl = f"""
+UPDATE {self.schema}.query
+SET 
+    score = :score
+WHERE question_id = :question_id
+                """
+            con.execute(text(ddl), {
                     'score': 1,
                     'question_id': question_id
                 })
-            con.execute(text("""
-                    UPDATE chat.question
-                    SET type = :type,
-                        public = :public
-                    WHERE id = :question_id
-                """), {
+            ddl = f"""
+UPDATE {self.schema}.question
+SET type = :type,
+    public = :public
+WHERE id = :question_id
+                """
+            con.execute(text(ddl), {
                     'type': 'train',
                     'public': True,
                     'question_id': question_id
                 })
         return True
+
+    # Functions for creating and managing the database schema
+    def create_schema(self):
+
+        # Connect with schema manager role to create the schema
+        import os
+        _ge = lambda x,d: os.getenv(x, d)
+        schema_manager = _ge('CHAT_SCHEMA_MANAGER', 'schema_manager')
+        schema_manager_password = _ge('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
+        
+        connectionstring = f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}@{self.hostname}:{self.port}/{self.database}"
+        engine = create_engine(connectionstring)
+
+
+        ddl_reader = f"""
+CREATE ROLE {self.db_user} WITH LOGIN PASSWORD :db_password;
+"""
+        ddl_schema = f"""
+CREATE SCHEMA IF NOT EXISTS {self.schema} AUTHORIZATION {schema_manager};
+GRANT ALL PRIVILEGES ON SCHEMA {self.schema} TO {self.db_user};
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA {self.schema} TO {self.db_user};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {self.schema} TO {self.db_user};
+ALTER DEFAULT PRIVILEGES IN SCHEMA {self.schema}
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {self.db_user};
+ALTER DEFAULT PRIVILEGES IN SCHEMA {self.schema}
+  GRANT USAGE ON SEQUENCES TO {self.db_user};
+"""
+
+        ddl_tables = f"""
+-- create tables and sequences in the specified schema
+SET search_path = {self.schema}, public;
+CREATE TYPE {self.schema}.type_role AS ENUM ('agent','user');
+CREATE TYPE {self.schema}.type_question AS ENUM ('train','user','followup');
+
+CREATE SEQUENCE IF NOT EXISTS user_id_seq;
+CREATE TABLE {self.schema}.user (
+    id integer DEFAULT nextval('{self.schema}.user_id_seq'::regclass) NOT NULL,
+    username character varying,
+    email character varying,
+    PRIMARY KEY (id)
+);
+
+CREATE SEQUENCE IF NOT EXISTS knowledge_id_seq;
+CREATE TABLE {self.schema}.knowledge (
+    id integer DEFAULT nextval('{self.schema}.knowledge_id_seq'::regclass) NOT NULL,
+    reference character varying(64) UNIQUE,
+    content text,
+    PRIMARY KEY (id)
+);
+
+CREATE SEQUENCE IF NOT EXISTS meta_id_seq;
+CREATE TABLE {self.schema}.meta (
+    id integer DEFAULT nextval('{self.schema}.meta_id_seq'::regclass) NOT NULL,
+    content text,
+    PRIMARY KEY (id)
+);
+
+CREATE SEQUENCE IF NOT EXISTS session_id_seq;
+CREATE TABLE {self.schema}.session (
+    id integer DEFAULT nextval('{self.schema}.session_id_seq'::regclass) NOT NULL,
+    timestamp timestamp without time zone DEFAULT now(),
+    label character varying NOT NULL,
+    meta_id integer NOT NULL,
+    user_id integer NOT NULL,
+    referenced_session_id integer,
+    PRIMARY KEY (id),
+    FOREIGN KEY (meta_id) REFERENCES {self.schema}.meta(id) ON UPDATE NO ACTION ON DELETE NO ACTION,
+    FOREIGN KEY (referenced_session_id) REFERENCES {self.schema}.session(id) ON UPDATE NO ACTION ON DELETE NO ACTION,
+    FOREIGN KEY (user_id) REFERENCES {self.schema}.user(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+
+
+CREATE SEQUENCE IF NOT EXISTS chathistory_id_seq;
+CREATE SEQUENCE IF NOT EXISTS chathistory_sequence_seq;
+CREATE TABLE {self.schema}.chathistory (
+    id integer DEFAULT nextval('{self.schema}.chathistory_id_seq'::regclass) NOT NULL,
+    session_id integer NOT NULL,
+    sequence integer NOT NULL DEFAULT nextval('{self.schema}.chathistory_sequence_seq'::regclass),
+    role {self.schema}.type_role NOT NULL,
+    timestamp timestamp without time zone DEFAULT now(),
+    content text NOT NULL,
+    PRIMARY KEY (id),
+    FOREIGN KEY (session_id) REFERENCES {self.schema}.session(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+
+CREATE SEQUENCE IF NOT EXISTS question_id_seq;
+CREATE TABLE {self.schema}.question (
+    id integer DEFAULT nextval('{self.schema}.question_id_seq'::regclass) NOT NULL,
+    type {self.schema}.type_question DEFAULT 'user'::{self.schema}.type_question,
+    content text NOT NULL,
+    generated text,
+    public boolean,
+    session_id integer,
+    PRIMARY KEY (id),
+    FOREIGN KEY (session_id) REFERENCES {self.schema}.session(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+
+CREATE SEQUENCE IF NOT EXISTS equivalence_id_seq;
+CREATE TABLE {self.schema}.equivalence (
+    id integer DEFAULT nextval('{self.schema}.equivalence_id_seq'::regclass) NOT NULL,
+    question1_id integer NOT NULL,
+    question2_id integer NOT NULL,
+    count_acceptance integer DEFAULT 0,
+    count_rejection integer DEFAULT 0,
+    PRIMARY KEY (id),
+    FOREIGN KEY (question1_id) REFERENCES {self.schema}.question(id) ON UPDATE NO ACTION ON DELETE NO ACTION,
+    FOREIGN KEY (question2_id) REFERENCES {self.schema}.question(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+
+CREATE SEQUENCE IF NOT EXISTS query_id_seq;
+CREATE TABLE {self.schema}.query (
+    id integer DEFAULT nextval('{self.schema}.query_id_seq'::regclass) NOT NULL,
+    sql text NOT NULL,
+    question_id integer NOT NULL,
+    score integer,
+    PRIMARY KEY (id),
+    FOREIGN KEY (question_id) REFERENCES {self.schema}.question(id) ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+"""
+        
+        with engine.connect() as con:
+            try:
+                con.execute(text(ddl_reader), {'db_password': self.db_password})
+            except Exception as e:
+                print(f"Error creating reader role (might already exist): {e}")
+            con.commit()
+            con.execute(text(ddl_schema))
+            con.commit()
+            con.execute(text(ddl_tables))
+            con.commit()
 
 if __name__ == '__main__':
     import os

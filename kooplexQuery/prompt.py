@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import time
 from kooplexQuery.motor import Motor, supported_models
+from kooplexQuery_utils import Database_configuration
 import asyncio
 import uuid
 import sys
@@ -263,6 +264,8 @@ def prompt():
         if st.button("Save Accurate Query", width='stretch', disabled=not st.session_state.motor.can_prepare_save):
             st.session_state.save_req=True
             st.rerun()
+
+        Database_configuration()
 
     # The page body
     def show_examples(n_examples=3):

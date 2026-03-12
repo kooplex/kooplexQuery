@@ -36,6 +36,17 @@ def upload_schema_to_chat_db(schema_file):
         st.error("Failed to upload database schema.")
 
 def Database_configuration():
+    if st.session_state.get('custom_db_config') is None:
+        st.session_state['custom_db_config'] = {
+            "hostname": os.getenv("DB_HOST", "localhost"),
+            "port": os.getenv("DB_PORT", "5432"),
+            "database": os.getenv("DB_NAME", "mydatabase"),
+            "db_user": os.getenv("DB_USER", "myuser"),
+            "db_password": os.getenv("DB_PASSWORD", "mypassword"),
+            "db_type": os.getenv("DB_TYPE", "postgres"),
+            "db_schema": os.getenv("DB_SCHEMA", "distilled"),
+            "db_title": os.getenv("DB_TITLE", "My Database")
+        }
     st.subheader("Database Information")
     # Open fileds to input database connection details, and update the connection when submitted
     st.file_uploader(label="Upload config file (json)", type="json", key="config_file")
@@ -102,17 +113,6 @@ def main():
     # set page title and layout
     st.set_page_config(page_title="KooplexQuery Database Management", layout="wide")
     
-    if st.session_state.get('custom_db_config') is None:
-        st.session_state['custom_db_config'] = {
-            "hostname": os.getenv("DB_HOST", "localhost"),
-            "port": os.getenv("DB_PORT", "5432"),
-            "database": os.getenv("DB_NAME", "mydatabase"),
-            "db_user": os.getenv("DB_USER", "myuser"),
-            "db_password": os.getenv("DB_PASSWORD", "mypassword"),
-            "db_type": os.getenv("DB_TYPE", "postgres"),
-            "db_schema": os.getenv("DB_SCHEMA", "distilled"),
-            "db_title": os.getenv("DB_TITLE", "My Database")
-        }
     # Initialize Motor and VectorStore
     if st.session_state.get('motor') is None:
         st.session_state['motor'] = Motor()
@@ -291,34 +291,38 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 # Add new instructions
-                st.text_area("Instructions", value="", key="instructions_input")
+                st.header("Instructions")
+                st.markdown(st.session_state.get('instructions'))
+                st.text_area("Set prompt  for LLM", value="", key="instructions_input")
                 if st.button("Update Instructions"):
                     st.session_state['motor'].db_chat.save_knowledge(reference="instructions",
                                                                      content=st.session_state.instructions_input)
                     st.success("Instructions updated in chat database!")
                     st.session_state['instructions'] = st.session_state['motor'].db_chat.load_knowledge(reference="instructions")
-                st.header("Instructions")
-                st.text(st.session_state.get('instructions'))
+                
+                
 
                 # Add new data descriptor
-                st.text_area("Data Descriptor", value="", key="data_descriptor_input")
+                st.header("Data Descriptor")
+                st.text(st.session_state.get('data_descriptor'))
+                st.text_area("Explain the data", value="", key="data_descriptor_input")
                 if st.button("Update Data Descriptor"):
                     st.session_state['motor'].db_chat.save_knowledge(reference="data_descriptor",
                                                                      content=st.session_state.data_descriptor_input)
                     st.success("Data descriptor updated in chat database!")
                     st.session_state['data_descriptor'] = st.session_state['motor'].db_chat.load_knowledge(reference="data_descriptor")
-                st.header("Data Descriptor")
-                st.text(st.session_state.get('data_descriptor'))
+                
             with col2:
                 # Add new data reference
-                st.text_area("Data Reference", value="", key="database_reference_input")
+                st.header("Database Reference")
+                st.markdown(st.session_state.get('database_reference'))
+                st.text_area("Describe the database", value="", key="database_reference_input")
                 if st.button("Update Data Reference"):
                     st.session_state['motor'].db_chat.save_knowledge(reference="data_reference",
                                                                      content=st.session_state.database_reference_input)
                     st.success("Data reference updated in chat database!")
                     st.session_state['database_reference'] = st.session_state['motor'].db_chat.load_knowledge(reference="data_reference")
-                st.header("Database Reference")
-                st.text(st.session_state.get('database_reference'))
+                
         
     elif st.session_state['current_tab'] == "Examples":
         with disp.container():

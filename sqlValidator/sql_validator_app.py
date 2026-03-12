@@ -1,15 +1,22 @@
 import streamlit as st
 from streamlit_extras.chart_container import *
-import streamlit.components.v1 as components
 from streamlit_elements import html
 import logging
-import time
 from kooplexQuery.motor import Motor, supported_models
-import asyncio
+from kooplexQuery_utils import Database_configuration
 import uuid
 import os
 import pandas
+from pathlib import Path
 logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    filename='/tmp//app.log', 
+    level=logging.DEBUG
+)
+logger = logging.getLogger(__name__)
+logger.debug("START")
+
 
 def main():
     # Set some session state defaults
@@ -269,18 +276,23 @@ def main():
             
         st.write(st.session_state.selected_question['question'])    
 
+        Database_configuration()
+
+
     # The page body
     def show_examples(n_examples=3):
-        if st.session_state.motor.chat_history.is_empty:
-            with example_container.container():
+        with example_container.container():
+            st.write("### Examples")
+            if st.session_state.motor.is_new_session:
                     keys, data = st.session_state.motor.db_chat.fetch_all_examples()
-                    df = pd.DataFrame(columns=keys, data=data)
-                    st.session_state.df = df[['question_id', 'content', 'sql', 'type', 'public', 'score']]
-                    st.session_state.df.sort_values(by=['public','score', 'content' ], ascending=True, inplace=True)
+                    st.write(f"Select an example from the database to start validating. {len(data)} examples available.")
+                    st.session_state.df = pd.DataFrame(columns=keys, data=data)
+                    #st.session_state.df = df[['question_id', 'question_content', 'sql', 'type', 'public', 'score']]
+                    st.session_state.df.sort_values(by=['public','score', 'question_content' ], ascending=True, inplace=True)
                     # Add a data editor with row selection
                     event = st.dataframe(
                         st.session_state.df,
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                         on_select="rerun",
                         
@@ -294,7 +306,7 @@ def main():
                         selected_row = st.session_state.df.iloc[selected_idx]
                         st.session_state.selected_question = {
                             'question_id': selected_row['question_id'],
-                            'question' : selected_row['content'],
+                            'question' : selected_row['question_content'],
                             'sql' : selected_row['sql'],
                             'score' : selected_row['score'],
                             'type' : selected_row['type'],
@@ -304,9 +316,8 @@ def main():
                         st.info(f"Continuing with: {st.session_state.selected_question }")
                         st.session_state.motor.select_example(st.session_state.selected_question['question'],
                                                             st.session_state.selected_question['sql'])
-
-        else:
-            example_container.empty()
+            else:
+                st.write("There are no examples yet")
 
     show_examples()
     if st.session_state.rerun:
