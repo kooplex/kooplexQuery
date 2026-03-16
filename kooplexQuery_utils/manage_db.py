@@ -35,32 +35,78 @@ def upload_schema_to_chat_db(schema_file):
         logger.error(f"Error uploading database schema: {e}")
         st.error("Failed to upload database schema.")
 
+
+# Inject CSS globally
+st.html("""
+<style>
+div[data-testid="stDialog"] div[role="dialog"]:has(.big-dialog) {
+    width: 80vw;
+    height: None;
+}
+</style>
+""")
+
+# Pop up dialogs
+@st.dialog("Database Configuration")
 def Database_configuration():
+    st.html("<span class='big-dialog'></span>")
+    def text_field(label, columns=None, **input_params):
+        c1, c2 = st.columns(2)
+
+        # Display field name with some alignment
+        c1.markdown("####")
+        c1.markdown(label)
+
+        # Sets a default key parameter to avoid duplicate key errors
+        input_params.setdefault("key", label)
+
+        # Forward text input parameters
+        return c2.text_input("", **input_params)
     if st.session_state.get('custom_db_config') is None:
         st.session_state['custom_db_config'] = {
             "hostname": os.getenv("DB_HOST", "localhost"),
             "port": os.getenv("DB_PORT", "5432"),
-            "database": os.getenv("DB_NAME", "mydatabase"),
+            "database": os.getenv("DB_DATABASE", "mydatabase"),
             "db_user": os.getenv("DB_USER", "myuser"),
             "db_password": os.getenv("DB_PASSWORD", "mypassword"),
             "db_type": os.getenv("DB_TYPE", "postgres"),
             "db_schema": os.getenv("DB_SCHEMA", "distilled"),
             "db_title": os.getenv("DB_TITLE", "My Database")
         }
-    st.subheader("Database Information")
+    if st.session_state.get('custom_db_chat_config') is None:
+        st.session_state['custom_db_config'] = {
+            "hostname": os.getenv("CHAT_HOST", "localhost"),
+            "port": os.getenv("CHAT_PORT", "5432"),
+            "database": os.getenv("CHAT_DATABASE", "mydatabase"),
+            "db_user": os.getenv("CHAT_USER", "myuser"),
+            "db_password": os.getenv("CHAT_PASSWORD", "mypassword"),
+            "db_schema": os.getenv("CHAT_SCHEMA", "distilled"),
+        }
     # Open fileds to input database connection details, and update the connection when submitted
     st.file_uploader(label="Upload config file (json)", type="json", key="config_file")
+    # Load configuration 
+    database_configs = ["sewage", "basketball"]
+    selected_db = st.selectbox("Select Database config",
+            database_configs,
+            key="selected_config",
+            # format_func=lambda x:f"{x.name} - {x.type}",
+            # on_change=on_model_selection_change,
+            )
+
     # Type manually connection details to connect to a database, and update the connection when submitted
-    with st.expander("Database Connection Details", expanded=False):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Database server")
         with st.form("db_info_form"):
-            st.text_input(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="db_host")
-            st.text_input(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="db_user")
-            st.text_input(label="Password", value="", key="db_password", type="password")
-            st.text_input(label="Port", value=st.session_state['custom_db_config'].get('port'), key="db_port")
-            st.text_input(label="Database Name", value=st.session_state['custom_db_config'].get('database'), key="db_name")
-            st.text_input(label="Schema", value=st.session_state['custom_db_config'].get('schema'), key="schema")
-            st.text_input(label="Type", value=st.session_state['custom_db_config'].get('db_type'), key="db_type")
-            st.text_input(label="Database Title", value=st.session_state['custom_db_config'].get('db_title'), key="db_title")
+            # st.text_input(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="db_host")
+            text_field(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="db_host")
+            text_field(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="db_user")
+            text_field(label="Password", value="", key="db_password", type="password")
+            text_field(label="Port", value=st.session_state['custom_db_config'].get('port'), key="db_port")
+            text_field(label="Database Name", value=st.session_state['custom_db_config'].get('database'), key="db_name")
+            text_field(label="Schema", value=st.session_state['custom_db_config'].get('schema'), key="schema")
+            text_field(label="Type", value=st.session_state['custom_db_config'].get('db_type'), key="db_type")
+            text_field(label="Database Title", value=st.session_state['custom_db_config'].get('db_title'), key="db_title")
             if st.form_submit_button("Connect"):
                 st.session_state['custom_db_config'] = {
                     "hostname": st.session_state.db_host,
@@ -76,14 +122,14 @@ def Database_configuration():
                 tmp_config.pop('db_title', None)
                 st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init(tmp_config)
                 st.success("Database connection updated!")
-    with st.expander("Chat Database Connection Details", expanded=False):
+    with col2:
+        st.subheader("Metadata server")
         with st.form("db_chat_form"):
-            st.text_input(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="chat_host")
-            st.text_input(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="chat_user")
-            st.text_input(label="Password", value="", key="chat_password", type="password")
-            st.text_input(label="Port", value=st.session_state['custom_db_config'].get('port'), key="chat_port")
-            st.text_input(label="Database", value=st.session_state['custom_db_config'].get('database'), key="chat_database")
-            st.text_input(label="Schema", value=st.session_state['custom_db_config'].get('schema'), key="chat_schema")
+            text_field(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="chat_host")
+            text_field(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="chat_user")
+            text_field(label="Password", value="", key="chat_password", type="password")
+            text_field(label="Port", value=st.session_state['custom_db_config'].get('port'), key="chat_port")
+            text_field(label="Database", value=st.session_state['custom_db_config'].get('database'), key="chat_database")
             if st.form_submit_button("Connect"):
                 st.session_state['custom_chatdb_config'] = {
                     "hostname": st.session_state.chat_host,
@@ -210,7 +256,8 @@ def main():
             st.session_state['current_tab'] = "Search in the whole VectorStore"
 
         # List Database information
-        Database_configuration()
+        if st.button("Database settings", width='stretch'):
+            Database_configuration()    
 
     if st.session_state['current_tab'] == "Schema":
         with disp.container():
@@ -291,14 +338,14 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 # Add new instructions
-                st.header("Instructions")
-                st.markdown(st.session_state.get('instructions'))
+                st.header("Instruction")
+                st.markdown(st.session_state.get('instruction'))
                 st.text_area("Set prompt  for LLM", value="", key="instructions_input")
-                if st.button("Update Instructions"):
-                    st.session_state['motor'].db_chat.save_knowledge(reference="instructions",
+                if st.button("Update Instruction"):
+                    st.session_state['motor'].db_chat.save_knowledge(reference="instruction",
                                                                      content=st.session_state.instructions_input)
-                    st.success("Instructions updated in chat database!")
-                    st.session_state['instructions'] = st.session_state['motor'].db_chat.load_knowledge(reference="instructions")
+                    st.success("Instruction updated in chat database!")
+                    st.session_state['instruction'] = st.session_state['motor'].db_chat.load_knowledge(reference="instruction")
                 
                 
 

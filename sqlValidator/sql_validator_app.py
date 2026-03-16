@@ -276,8 +276,9 @@ def main():
             
         st.write(st.session_state.selected_question['question'])    
 
-        Database_configuration()
-
+        # List Database information
+        if st.button("Database settings", width='stretch'):
+            Database_configuration()   
 
     # The page body
     def show_examples(n_examples=3):

@@ -265,8 +265,10 @@ def prompt():
             st.session_state.save_req=True
             st.rerun()
 
-        Database_configuration()
-
+        # List Database information
+        if st.button("Database settings", width='stretch'):
+            Database_configuration()   
+            
     # The page body
     def show_examples(n_examples=3):
         if st.session_state.motor.is_new_session:

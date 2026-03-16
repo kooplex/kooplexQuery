@@ -371,16 +371,20 @@ CREATE TABLE {self.schema}.query (
 );
 """
         
-        with engine.connect() as con:
-            try:
-                con.execute(text(ddl_reader), {'db_password': self.db_password})
-            except Exception as e:
-                print(f"Error creating reader role (might already exist): {e}")
-            con.commit()
-            con.execute(text(ddl_schema))
-            con.commit()
-            con.execute(text(ddl_tables))
-            con.commit()
+        try: 
+            with engine.connect() as con:
+                try:
+                    con.execute(text(ddl_reader), {'db_password': self.db_password})
+                except Exception as e:
+                    print(f"Error creating reader role (might already exist): {e}")
+                con.commit()
+                con.execute(text(ddl_schema))
+                con.commit()
+                con.execute(text(ddl_tables))
+                con.commit()
+        except:
+            print("Error connecting to DB chat as schema manager!")
+
 
 if __name__ == '__main__':
     import os

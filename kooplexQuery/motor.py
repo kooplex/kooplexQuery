@@ -152,7 +152,7 @@ Database Schema: {dbschema}
         if len(self._chat_history.messages)==1:
             self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
         self._plot_history=CustomChatHistory()
-        self._plot_history.add_system_message("You are a helper to create plots")
+        self._plot_history.add_system_message("""You are a helper to create plots.""")
         chromadb.api.client.SharedSystemClient.clear_system_cache() #TODO test if really required parrallel runs
         self.session_id=self.db_chat.new_session(username=username, email=email, label=label, meta="", referenced_session=referenced_session)
         logger.info ("NEW SESSION")
@@ -195,7 +195,7 @@ Database Schema: {dbschema}
         statement=getattr(error, 'statement', None)
         prompt = f"Correct the SQL query\n{statement}\nbecause: {detail}"
         t0=time.time()
-        self.current_model=model_name
+        # self.current_model=model_name
         self._chat_history.add_user_message(prompt, metadata={'timestamp': t0, 'model': self.current_model })
         collected=""
         async for chunk in self._llm_agent.astream(prompt):
@@ -211,19 +211,32 @@ Database Schema: {dbschema}
             self._chat_history.add_user_message(instruction_prompt, metadata={'type': 'plot', 'model': self.current_model})
 
             # PLOT WITH LLM  FIXME
-            if self.df.shape[0] < 1000:
-                tmpdf = self.df.copy()
-            else:
-                tmpdf = self.df.sample(1000, random_state=42)
-            prompt = f"""
-Data: {tmpdf.to_dict()}
+#             if self.df.shape[0] < 1000:
+#                 tmpdf = self.df.copy()
+#             else:
+#                 tmpdf = self.df.sample(1000, random_state=42)
+#             prompt = f"""
+# Data: {tmpdf.to_dict()}
+
+# User instructions for plotting: {instruction_prompt}
+
+# * Refer to the data as 'df'
+# * If there are multiple plots then use subplots in matplotlib
+#             """
+            full_prompt = f"""
+This is your base code for obtaining the data:
+```python
+from kooplexQuery_utils.plot_utils import *            
+sql_query = '''{self.sql}'''
+df = pd.read_sql(text(sql_query), con=engine)
+```
+Modify the above code according to the user's instructions!
+
+Use plotly!
 
 User instructions for plotting: {instruction_prompt}
-
-* Refer to the data as 'df'
-* If there are multiple plots then use subplots in matplotlib
-            """
-            self._plot_history.add_user_message(prompt)
+"""
+            self._plot_history.add_user_message(full_prompt)
             resp = ""
             async for chunk in self._llm_agent.astream(self._plot_history.messages):
                 if c:=chunk.content:
@@ -231,7 +244,10 @@ User instructions for plotting: {instruction_prompt}
                     yield c
             self._plot_history.add_ai_message(resp)
             # Extract the python code from the response
-            code = resp.split("```python")[1].split("```")[0].strip()
+            try:
+                code = resp.split("```python")[1].split("```")[0].strip()
+            except:
+                code = resp.split("```")[1].split("```")[0].strip()
             # Execute the code
             local_scope = {}
             noshow_code = "\n".join(
