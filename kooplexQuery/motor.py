@@ -344,7 +344,8 @@ User instructions for plotting: {instruction_prompt}
                 hostname=_ge('DB_HOST', 'localhost'), port=int(_ge('DB_PORT', 5432)),
                 database=_ge('DB_DATABASE', 'sewage'), schema=_ge('DB_SCHEMA', 'distilled'),
                 db_user=_ge('DB_USER', 'reader'),
-                db_password=_ge('DB_PASSWORD', ''), db_type=_ge('DB_TYPE', 'postgres')  
+                db_password=_ge('DB_PASSWORD', ''), db_type=_ge('DB_TYPE', 'postgres'),  
+                db_url=_ge('DB_URL', '')  
             )
 
     def _parse_sql(self, content: str) -> [Content_Chunk]:

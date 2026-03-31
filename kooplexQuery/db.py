@@ -1,9 +1,14 @@
 from sqlalchemy import create_engine, text
+import requests
 from pandas import pandas
+from io import StringIO
 
 class DBQuery(object):
-    def __init__(self, hostname, port, database, schema, db_user, db_password, db_type="postgres"):
-        if db_type=="postgres":
+    def __init__(self, hostname, port, database, schema, db_user, db_password, db_url=None, db_type="postgres"):
+        self.db_url = None
+        if db_url:
+            self.db_url = db_url
+        elif db_type=="postgres":
             connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
             self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
             self.schema=schema
@@ -12,22 +17,33 @@ class DBQuery(object):
             self.engine = create_engine(connectionstring)
 
     def query(self, sql, subst={}):
-        with self.engine.connect() as con:
-            if self.engine.dialect.name == 'postgresql':
-                return con.execute(text(sql), subst)
-            elif self.engine.dialect.name == 'mssql':
-                cursor = con.exec_driver_sql(sql)
-                return cursor
+        if self.db_url:
+            resp = requests.get(url=self.db_url.format(query=sql))
+            return resp.content.decode().split("\n")
+        else:
+            with self.engine.connect() as con:
+                if self.engine.dialect.name == 'postgresql':
+                    return con.execute(text(sql), subst)
+                elif self.engine.dialect.name == 'mssql':
+                    cursor = con.exec_driver_sql(sql)
+                    return cursor
 
     def query_to_df(self, sql, subst={}):
-        with self.engine.connect() as con:
-            return pandas.DataFrame(con.execute(text(sql), subst))
+        if self.db_url:
+            resp = requests.get(url=self.db_url.format(query=sql))
+            return pandas.read_csv(StringIO(resp.content.decode()))
+        else:
+            with self.engine.connect() as con:
+                return pandas.DataFrame(con.execute(text(sql), subst))
 
     def describe_tables(self, table_name_like = None):
-        if self.engine.dialect.name == 'postgresql':
+        if self.db_url:
+            return []
+        elif self.engine.dialect.name == 'postgresql':
             return self.describe_tables_postgres(table_name_like)
         elif self.engine.dialect.name == 'mssql':
             return self.describe_tables_mssql(table_name_like)
+            
 
     def describe_tables_postgres(self, table_name_like = None):
         if table_name_like:
@@ -69,7 +85,9 @@ ORDER BY o.name;
         return r.fetchall()
 
     def describe_columns(self, table_name_like = None):
-        if self.engine.dialect.name == 'postgresql':
+        if self.db_url:
+            return []
+        elif self.engine.dialect.name == 'postgresql':
             return self.describe_columns_postgres(table_name_like)
         elif self.engine.dialect.name == 'mssql':
             return self.describe_columns_mssql(table_name_like)

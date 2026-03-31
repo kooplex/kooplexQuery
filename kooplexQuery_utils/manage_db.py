@@ -16,6 +16,9 @@ import os
 from st_keyup import st_keyup
 import streamlit as st
 
+from kooplexQuery_utils.misc import *
+
+
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,102 +49,9 @@ div[data-testid="stDialog"] div[role="dialog"]:has(.big-dialog) {
 </style>
 """)
 
-# Pop up dialogs
 @st.dialog("Database Configuration")
-def Database_configuration():
-    st.html("<span class='big-dialog'></span>")
-    def text_field(label, columns=None, **input_params):
-        c1, c2 = st.columns(2)
-
-        # Display field name with some alignment
-        c1.markdown("####")
-        c1.markdown(label)
-
-        # Sets a default key parameter to avoid duplicate key errors
-        input_params.setdefault("key", label)
-
-        # Forward text input parameters
-        return c2.text_input("", **input_params)
-    if st.session_state.get('custom_db_config') is None:
-        st.session_state['custom_db_config'] = {
-            "hostname": os.getenv("DB_HOST", "localhost"),
-            "port": os.getenv("DB_PORT", "5432"),
-            "database": os.getenv("DB_DATABASE", "mydatabase"),
-            "db_user": os.getenv("DB_USER", "myuser"),
-            "db_password": os.getenv("DB_PASSWORD", "mypassword"),
-            "db_type": os.getenv("DB_TYPE", "postgres"),
-            "db_schema": os.getenv("DB_SCHEMA", "distilled"),
-            "db_title": os.getenv("DB_TITLE", "My Database")
-        }
-    if st.session_state.get('custom_db_chat_config') is None:
-        st.session_state['custom_db_config'] = {
-            "hostname": os.getenv("CHAT_HOST", "localhost"),
-            "port": os.getenv("CHAT_PORT", "5432"),
-            "database": os.getenv("CHAT_DATABASE", "mydatabase"),
-            "db_user": os.getenv("CHAT_USER", "myuser"),
-            "db_password": os.getenv("CHAT_PASSWORD", "mypassword"),
-            "db_schema": os.getenv("CHAT_SCHEMA", "distilled"),
-        }
-    # Open fileds to input database connection details, and update the connection when submitted
-    st.file_uploader(label="Upload config file (json)", type="json", key="config_file")
-    # Load configuration 
-    database_configs = ["sewage", "basketball"]
-    selected_db = st.selectbox("Select Database config",
-            database_configs,
-            key="selected_config",
-            # format_func=lambda x:f"{x.name} - {x.type}",
-            # on_change=on_model_selection_change,
-            )
-
-    # Type manually connection details to connect to a database, and update the connection when submitted
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Database server")
-        with st.form("db_info_form"):
-            # st.text_input(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="db_host")
-            text_field(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="db_host")
-            text_field(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="db_user")
-            text_field(label="Password", value="", key="db_password", type="password")
-            text_field(label="Port", value=st.session_state['custom_db_config'].get('port'), key="db_port")
-            text_field(label="Database Name", value=st.session_state['custom_db_config'].get('database'), key="db_name")
-            text_field(label="Schema", value=st.session_state['custom_db_config'].get('schema'), key="schema")
-            text_field(label="Type", value=st.session_state['custom_db_config'].get('db_type'), key="db_type")
-            text_field(label="Database Title", value=st.session_state['custom_db_config'].get('db_title'), key="db_title")
-            if st.form_submit_button("Connect"):
-                st.session_state['custom_db_config'] = {
-                    "hostname": st.session_state.db_host,
-                    "port": st.session_state.db_port,
-                    "database": st.session_state.db_name,
-                    "db_user": st.session_state.db_user,
-                    "db_password": st.session_state.db_password,
-                    "db_type": st.session_state.db_type,
-                    "schema": st.session_state.schema,
-                    "db_title": st.session_state.db_title
-                }
-                tmp_config = st.session_state['custom_db_config']
-                tmp_config.pop('db_title', None)
-                st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init(tmp_config)
-                st.success("Database connection updated!")
-    with col2:
-        st.subheader("Metadata server")
-        with st.form("db_chat_form"):
-            text_field(label="Host", value=st.session_state['custom_db_config'].get('hostname'), key="chat_host")
-            text_field(label="User", value=st.session_state['custom_db_config'].get('db_user'), key="chat_user")
-            text_field(label="Password", value="", key="chat_password", type="password")
-            text_field(label="Port", value=st.session_state['custom_db_config'].get('port'), key="chat_port")
-            text_field(label="Database", value=st.session_state['custom_db_config'].get('database'), key="chat_database")
-            if st.form_submit_button("Connect"):
-                st.session_state['custom_chatdb_config'] = {
-                    "hostname": st.session_state.chat_host,
-                    "port": st.session_state.chat_port,
-                    "database": st.session_state.chat_database,
-                    "db_user": st.session_state.chat_user,
-                    "db_password": st.session_state.chat_password,
-                    "schema": st.session_state.chat_schema,
-                }
-                st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init(st.session_state['custom_chatdb_config'])
-                st.success("Database connection updated!")
-
+def database_configuration():
+    DatabaseServerManager().Database_configuration()    
 
 def main():
 
@@ -155,6 +65,9 @@ def main():
                     st.text(f"{'; '.join([f'{k}: {r.metadata[k]}' for k in r.metadata.keys()])}")
 
         # return rows
+
+    if st.session_state.get('db_config') is None:
+        st.session_state['db_config'] = DatabaseServerManager()
 
     # set page title and layout
     st.set_page_config(page_title="KooplexQuery Database Management", layout="wide")
@@ -257,7 +170,8 @@ def main():
 
         # List Database information
         if st.button("Database settings", width='stretch'):
-            Database_configuration()    
+            # st.session_state['db_config'].Database_configuration()    
+            database_configuration()
 
     if st.session_state['current_tab'] == "Schema":
         with disp.container():
