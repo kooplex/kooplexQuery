@@ -4,21 +4,21 @@ from pandas import pandas
 from io import StringIO
 
 class DBQuery(object):
-    def __init__(self, hostname, port, database, schema, db_user, db_password, db_url=None, db_type="postgres"):
-        self.db_url = None
-        if db_url:
-            self.db_url = db_url
-        elif db_type=="postgres":
-            connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
+    def __init__(self, hostname, port, database, schema, user, password, url=None, type="postgres", title=None, *args, **kwargs):
+        self.url = None
+        if url:
+            self.url = url
+        elif type=="postgres":
+            connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
             self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
             self.schema=schema
-        elif db_type=="mssql":
-            connectionstring = f"mssql+pymssql://{db_user}:{db_password}@{hostname}:{port}/{database}"
+        elif type=="mssql":
+            connectionstring = f"mssql+pymssql://{user}:{password}@{hostname}:{port}/{database}"
             self.engine = create_engine(connectionstring)
 
     def query(self, sql, subst={}):
-        if self.db_url:
-            resp = requests.get(url=self.db_url.format(query=sql))
+        if self.url:
+            resp = requests.get(url=self.url.format(query=sql))
             return resp.content.decode().split("\n")
         else:
             with self.engine.connect() as con:
@@ -29,15 +29,15 @@ class DBQuery(object):
                     return cursor
 
     def query_to_df(self, sql, subst={}):
-        if self.db_url:
-            resp = requests.get(url=self.db_url.format(query=sql))
+        if self.url:
+            resp = requests.get(url=self.url.format(query=sql))
             return pandas.read_csv(StringIO(resp.content.decode()))
         else:
             with self.engine.connect() as con:
                 return pandas.DataFrame(con.execute(text(sql), subst))
 
     def describe_tables(self, table_name_like = None):
-        if self.db_url:
+        if self.url:
             return []
         elif self.engine.dialect.name == 'postgresql':
             return self.describe_tables_postgres(table_name_like)
@@ -85,7 +85,7 @@ ORDER BY o.name;
         return r.fetchall()
 
     def describe_columns(self, table_name_like = None):
-        if self.db_url:
+        if self.url:
             return []
         elif self.engine.dialect.name == 'postgresql':
             return self.describe_columns_postgres(table_name_like)
@@ -253,7 +253,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
 
-    db = DBQuery(hostname=args.server, port=args.port, database=args.database, schema=args.schema, db_user=args.user, db_password=args.password)
+    db = DBQuery(hostname=args.server, port=args.port, database=args.database, schema=args.schema, user=args.user, password=args.password)
 
     if args.command == "query":
         r= db.query_to_df(sql=args.sql) if args.pandas else db.query(sql=args.sql).all()

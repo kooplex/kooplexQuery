@@ -1,6 +1,0 @@
-langgraph
-streamlit
-langchain-openai
-langchain-community
-python-dotenv
-duckduckgo-search

@@ -1,16 +1,16 @@
 from sqlalchemy import create_engine, text
 
 class DBChat(object):
-    def __init__(self, hostname, port, database, schema, db_user, db_password, generated_callback=lambda c: None):
-        connectionstring = f"postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}"
+    def __init__(self, hostname, port, database, schema, user, password, generated_callback=lambda c: None):
+        connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
         
         self.cb_generated = generated_callback
         self.schema = schema
         self.port = port
         self.hostname = hostname
         self.database = database
-        self.db_user = db_user
-        self.db_password = db_password
+        self.user = user
+        self.password = password
 
         if not self._check_schema():
             print(f"Schema {schema} does not exist. Creating schema and tables...")
@@ -40,7 +40,7 @@ WHERE schema_name = :schema;
                 r = con.execute(q, {'schema': self.schema}).scalar()
                 return r is not None
         except Exception as e:
-            print(f"Error checking schema: {e}")
+            print(f"Error checking schema: {e}\n If chat database is alredy initialized, and read-only, than ignore this!")
             return False
 
     def _get_userid(self, username, email):
@@ -266,17 +266,17 @@ WHERE id = :question_id
 
 
         ddl_reader = f"""
-CREATE ROLE {self.db_user} WITH LOGIN PASSWORD :db_password;
+CREATE ROLE {self.user} WITH LOGIN PASSWORD :password;
 """
         ddl_schema = f"""
 CREATE SCHEMA IF NOT EXISTS {self.schema} AUTHORIZATION {schema_manager};
-GRANT ALL PRIVILEGES ON SCHEMA {self.schema} TO {self.db_user};
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA {self.schema} TO {self.db_user};
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {self.schema} TO {self.db_user};
+GRANT ALL PRIVILEGES ON SCHEMA {self.schema} TO {self.user};
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA {self.schema} TO {self.user};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {self.schema} TO {self.user};
 ALTER DEFAULT PRIVILEGES IN SCHEMA {self.schema}
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {self.db_user};
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {self.user};
 ALTER DEFAULT PRIVILEGES IN SCHEMA {self.schema}
-  GRANT USAGE ON SEQUENCES TO {self.db_user};
+  GRANT USAGE ON SEQUENCES TO {self.user};
 """
 
         ddl_tables = f"""
@@ -374,7 +374,7 @@ CREATE TABLE {self.schema}.query (
         try: 
             with engine.connect() as con:
                 try:
-                    con.execute(text(ddl_reader), {'db_password': self.db_password})
+                    con.execute(text(ddl_reader), {'password': self.password})
                 except Exception as e:
                     print(f"Error creating reader role (might already exist): {e}")
                 con.commit()
@@ -383,7 +383,7 @@ CREATE TABLE {self.schema}.query (
                 con.execute(text(ddl_tables))
                 con.commit()
         except:
-            print("Error connecting to DB chat as schema manager!")
+            print("Error connecting to DB chat as schema manager!\n If chat database is alredy initialized, and read-only, than ignore this!")
 
 
 if __name__ == '__main__':
@@ -441,7 +441,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
 
-    chatter = DBChat(hostname=args.server, port=args.port, database=args.database, schema=args.schema, db_user=args.user, db_password=args.password)
+    chatter = DBChat(hostname=args.server, port=args.port, database=args.database, schema=args.schema, user=args.user, password=args.password)
 
     if args.command == "session":
         print(f"Starting session for user {args.chatuser} with label {args.label}")

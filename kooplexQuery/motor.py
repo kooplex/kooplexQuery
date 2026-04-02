@@ -6,6 +6,7 @@ import logging
 import re
 from kooplexQuery.db_chat import DBChat
 from kooplexQuery.db import DBQuery
+from kooplexQuery.utils.sync_manager import VectorStoreSyncManager
 
 logging.basicConfig(
     filename='/tmp/app.log', 
@@ -53,10 +54,35 @@ class Motor(object):
         self._table_name_filter=table_name_filter
         self.db_chat = self._dbchat_init()
         self.db_source = self._dbtarget_init()
+        
+        # Initialize sync manager
+        self.sync_manager = VectorStoreSyncManager(db_chat=self.db_chat)
+        self._vectorstore = None
+
+    def _ensure_sync_manager(self):
+        """Initialize sync manager lazily for partially constructed Motor objects."""
+        if not hasattr(self, 'sync_manager') or self.sync_manager is None:
+            self.sync_manager = VectorStoreSyncManager(db_chat=getattr(self, 'db_chat', None))
+            logger.info("Sync manager initialized lazily")
+        elif getattr(self.sync_manager, 'db_chat', None) is None and hasattr(self, 'db_chat'):
+            self.sync_manager.set_db_chat(self.db_chat)
+        return self.sync_manager
 
     @property
     def error(self):
         return getattr(self, '_error', None)
+    
+    @property
+    def vectorstore(self):
+        return getattr(self, '_vectorstore', None)
+    
+    @vectorstore.setter
+    def vectorstore(self, vs):
+        """Set vectorstore and connect sync manager to it."""
+        self._vectorstore = vs
+        if vs is not None:
+            self._ensure_sync_manager().set_vectorstore(vs)
+            logger.info("VectorStore connected to sync manager")
 
     @property
     def current_model(self):
@@ -132,22 +158,31 @@ class Motor(object):
         pd.set_option('display.max_columns', None)
         pd.set_option('display.max_rows', None)
         label=label or random.randbytes(16)
-        data_descriptor = self.db_chat.load_knowledge(reference='data_descriptor')
-        dbschema = self.db_chat.load_knowledge(reference='schema')
-        dbreference = self.db_chat.load_knowledge(reference='reference')
-        table_description=dict(self.describe_tables())
-        table_column_description = pd.DataFrame(self.describe_columns())
-        context = f"""{data_descriptor}
-            
-{dbreference} table descriptions: {table_description}
+        context = ""
+        try:
+            data_descriptor = self.db_chat.load_knowledge(reference='data_descriptor')
+            dbschema = self.db_chat.load_knowledge(reference='schema')
+            dbreference = self.db_chat.load_knowledge(reference='reference')
+            table_description=dict(self.describe_tables())
+            table_column_description = pd.DataFrame(self.describe_columns())
+            context = f"""{data_descriptor}
+                
+    {dbreference} table descriptions: {table_description}
 
-{dbreference} table column descriptions: {table_column_description}
+    {dbreference} table column descriptions: {table_column_description}
 
-Database Schema: {dbschema}
-        """
+    Database Schema: {dbschema}
+            """
+        except Exception as e:
+            logger.error(f"Error loading knowledge: {e}")
+            context = ""
         self._chat_history=CustomChatHistory()
         self._chat_history.add_system_message(context)
-        self._chat_history.add_system_message(self.db_chat.load_knowledge(reference='instruction'))
+        try:
+            self._chat_history.add_system_message(self.db_chat.load_knowledge(reference='instruction'))
+        except Exception as e:
+            logger.error(f"Error loading instruction knowledge: {e}")
+            self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
         # In case the chat db was not properly initialized and there are no instructions, we add a default one
         if len(self._chat_history.messages)==1:
             self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
@@ -319,6 +354,45 @@ User instructions for plotting: {instruction_prompt}
         logger.info(f"Saving query with question: {self.question} and sql: {self.sql}")
         self.db_chat.save_query(self.session_id, self.question, self.sql, question_type = 'user', public = False)
         self._question=None
+    
+    def save_knowledge(self, reference: str, content: str):
+        """
+        Save knowledge to database and automatically sync to vectorstore.
+        
+        Args:
+            reference: The reference key for the knowledge (e.g., 'schema', 'instruction')
+            content: The knowledge content to save
+        """
+        logger.info(f"Saving knowledge with reference: {reference}")
+        self.db_chat.save_knowledge(reference, content)
+        # Automatically sync to vectorstore if available
+        self._ensure_sync_manager().sync_knowledge(reference, content)
+    
+    def validate_and_sync_question(self, question_id: int):
+        """
+        Validate a question and automatically sync it to vectorstore.
+        
+        Args:
+            question_id: The ID of the question to validate
+        """
+        logger.info(f"Validating question: {question_id}")
+        self.db_chat.validate_question(question_id)
+        # Fetch the validated question and sync it
+        try:
+            from sqlalchemy import text
+            with self.db_chat.engine.connect() as con:
+                q = text("""
+                    SELECT q.content, a.sql 
+                    FROM question q 
+                    JOIN query a ON q.id = a.question_id 
+                    WHERE q.id = :qid
+                """)
+                result = con.execute(q, {'qid': question_id}).fetchone()
+                if result:
+                    question_content, sql = result
+                    self._ensure_sync_manager().sync_example(question_id, question_content, sql, True)
+        except Exception as e:
+            logger.error(f"Error syncing validated question {question_id}: {e}")
 
     # private methods
     def _dbchat_init(self, db_config: dict = {}) -> DBChat:
@@ -330,22 +404,23 @@ User instructions for plotting: {instruction_prompt}
             return DBChat(
                 hostname=_ge('CHAT_HOST', 'localhost'), port=int(_ge('CHAT_PORT', 5432)),
                 database=_ge('CHAT_DATABASE', 'sewage'), schema=_ge('CHAT_SCHEMA', 'chat'),
-                db_user=_ge('CHAT_USER', 'chat_agent'),
-                db_password=_ge('CHAT_PASSWORD', ''), generated_callback=lambda c: None
+                user=_ge('CHAT_USER', 'chat_agent'),
+                password=_ge('CHAT_PASSWORD', ''), generated_callback=lambda c: None
             )
 
     def _dbtarget_init(self, db_config: dict = {}) -> DBQuery:
         if db_config:
             logger.debug(f"Initializing DBQuery with provided db_config: {db_config}")
-            return DBQuery(**db_config)
+            return DBQuery(**db_config, generated_callback=lambda c: None)
+
         else:
             logger.debug(f"Initializing DBQuery with host: {_ge('DB_HOST', 'localhost')}, port: {int(_ge('DB_PORT', 5432))}, database: {_ge('DB_DATABASE', 'sewage')}, schema: {_ge('DB_SCHEMA', 'distilled')}, user: {_ge('DB_USER', 'reader')}")
             return DBQuery(
                 hostname=_ge('DB_HOST', 'localhost'), port=int(_ge('DB_PORT', 5432)),
                 database=_ge('DB_DATABASE', 'sewage'), schema=_ge('DB_SCHEMA', 'distilled'),
-                db_user=_ge('DB_USER', 'reader'),
-                db_password=_ge('DB_PASSWORD', ''), db_type=_ge('DB_TYPE', 'postgres'),  
-                db_url=_ge('DB_URL', '')  
+                user=_ge('DB_USER', 'reader'),
+                password=_ge('DB_PASSWORD', ''), type=_ge('DB_TYPE', 'postgres'),  
+                url=_ge('DB_URL', '')  
             )
 
     def _parse_sql(self, content: str) -> [Content_Chunk]:

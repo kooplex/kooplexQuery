@@ -1,5 +1,7 @@
 import chromadb
 import logging
+import os
+import shutil
 from langchain_chroma import Chroma
 from chromadb.config import Settings
 from langchain_community.embeddings import GPT4AllEmbeddings
@@ -19,17 +21,48 @@ class VectorStore():
 
     def __init__(self, persist_directory="./chroma_vector_db"):
     # def __init__(self):
-        
+        self.persist_directory = os.path.abspath(persist_directory)
         self.embeddings = None
-
-        # self.persist_directory = persist_directory
-        # self.vectorstore = None
-        
-        self.chroma_client = chromadb.PersistentClient(path=persist_directory)
+        self.chroma_client = self._build_chroma_client()
         # self.chroma_client = chromadb.Client()
 
         self.example_selector = None 
         self.example_prompt = None
+        self.examples = self._init_db(self.CollectionNames["EXAMPLES"])
+        self.docs = self._init_db(self.CollectionNames["DOCS"])
+        self.advices = self._init_db(self.CollectionNames["ADVICES"])
+        self.schema = self._init_db(self.CollectionNames["SCHEMA"])
+
+    def _build_chroma_client(self):
+        """Create a resilient Chroma client with auto-recovery for corrupted stores."""
+        try:
+            os.makedirs(self.persist_directory, exist_ok=True)
+            return chromadb.PersistentClient(path=self.persist_directory)
+        except BaseException as e:
+            logger.error(f"Persistent vector store init failed at '{self.persist_directory}': {e}")
+
+        # Retry once with a clean persisted directory.
+        try:
+            shutil.rmtree(self.persist_directory, ignore_errors=True)
+            os.makedirs(self.persist_directory, exist_ok=True)
+            logger.warning("Recreated vector store directory after init failure; retrying PersistentClient")
+            return chromadb.PersistentClient(path=self.persist_directory)
+        except BaseException as e:
+            logger.error(f"Persistent vector store reinit failed at '{self.persist_directory}': {e}")
+
+        # Last resort fallback: keep app running with an in-memory store.
+        logger.warning("Falling back to in-memory Chroma client (vector data will not persist)")
+        return chromadb.Client()
+
+    def reset(self):
+        """Delete all collections and recreate the vectorstore at the configured path."""
+        for collection_name in self.get_collections():
+            try:
+                self.chroma_client.delete_collection(collection_name)
+            except Exception:
+                logger.info(f"Collection {collection_name} could not be deleted during reset")
+
+        self.chroma_client = self._build_chroma_client()
         self.examples = self._init_db(self.CollectionNames["EXAMPLES"])
         self.docs = self._init_db(self.CollectionNames["DOCS"])
         self.advices = self._init_db(self.CollectionNames["ADVICES"])
