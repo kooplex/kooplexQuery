@@ -35,6 +35,7 @@ def prompt():
     st.session_state.setdefault('plot_instruction', None)
     st.session_state.setdefault('save_req', False)
     st.session_state.setdefault('rerun', False)
+    st.session_state.setdefault('session_init_failed', False)
 
     st.session_state.setdefault('df', None)
 
@@ -59,10 +60,39 @@ def prompt():
     histo_container = st.empty()
     control_container = st.empty()
 
-    @st.dialog("Database Configuration")
-    def database_configuration():
-        dsm = DatabaseServerManager()
-        dsm.Database_configuration()    
+    # This is the container in the main window to show data triggered by buttons in the sidebar    
+    disp = st.empty()
+
+    # @st.dialog("Database Configuration")
+    # def database_configuration():
+    #     dsm = DatabaseServerManager()
+    #     dsm.Database_configuration()    
+
+    @st.dialog("Set environment variables")
+    def config_env_dialog():
+        st.markdown("### Set environment variables for database connection")
+        st.markdown("These variables will be saved into the `config.env` file and loaded on the next startup to initialize the Motor. After setting these, please restart the app.")
+        env_vars = {
+            "OPENAI_API_KEY": "OpenAI API key",
+            "OLLAMA_LOCAL_HOST": "Ollama local host",
+            "OLLAMA_LOCAL_PORT": "Ollama local port",
+            "ANTHROPIC_API_KEY": "Anthropic API key",
+        }
+        new_values = {}
+        for var, desc in env_vars.items():
+            new_values[var] = st.text_input(desc, key=var)
+        
+        if st.button("Save environment variables"):
+            save_env_variables(new_values)
+            st.success("Environment variables saved! Please restart the app for changes to take effect.")
+
+    def save_env_variables(new_values):
+        st.session_state['environment_variables_set'] = False
+        config_path = Path(__file__).parent.parent / "config.env"
+        with open(config_path, "w") as f:
+            for var, value in new_values.items():
+                f.write(f"{var}={value}\n")
+        logger.info(f"Environment variables saved to {config_path}")
 
     # Pop up dialogs
     @st.dialog("DB browser")
@@ -218,17 +248,35 @@ def prompt():
     #            user_msg=chat_history[-1]
     #            st.chat_message("user").write(user_msg["content"])
 
+    # If environmental variables were not yet read then load it with dotenv
+    if 'environment_variables_set' not in st.session_state or    st.session_state['environment_variables_set'] == False:
+        from dotenv import load_dotenv
+        load_dotenv("config.env")
+
     # If motor startup failed, expose DB settings and stop the rest of the app flow.
     if st.session_state.get('db_config_set') is None:
+        st.warning("Please configure database settings and press Connect. If session creation fails, open Database settings and try again.")
+        # st.stop()    
+
+    # If connect was not yet pressed show the configurator
+    if st.session_state.get('db_config_set') is None:
+        st.session_state['interface'] = "dbconfig"
         with st.sidebar:
             st.title("KooplexQuery")
-            st.error("Backend initialization failed.")
+            #st.error("Backend initialization failed.")
             if st.session_state.get('motor_init_error'):
                 st.caption(st.session_state['motor_init_error'])
-            if st.button("Database settings", width='stretch'):
-                database_configuration()
-        st.warning("Please configure database settings and press Connect. If session creation fails, open Database settings and try again.")
-        st.stop()    
+            # if st.button("Database settings", width='stretch'):
+        # with disp.container():
+    
+    # Set the first db config to show
+    if st.session_state.get('selected_db_index') is None:
+        st.session_state['selected_db_index'] = 0
+
+    if st.session_state.get('interface') == "dbconfig":
+        dsm = DatabaseServerManager()
+        dsm.Database_configuration()    
+        
 
     # Initialize the backend motor
     if st.session_state.get('motor') is None:
@@ -243,8 +291,8 @@ def prompt():
             st.session_state['motor'] = None
 
     # Init view
-    if st.session_state.get('interface') is None:
-        st.session_state.interface = 'chat'
+    # if st.session_state.get('interface') is None:
+        # st.session_state.interface = 'chat'
 
     # Convenient function to clear parts of the session state
     def clear_session_keys(*keys):
@@ -256,17 +304,27 @@ def prompt():
     def _newsession():
         try:
             st.session_state['session']=st.session_state.motor.new_session(username=username, email=email) #TODO: label, referenced_session
-        except:
+            st.session_state['session_init_failed'] = False
+        except Exception as e:
+            logger.error(f"Error initializing a new session: {e}")
             st.error("Error initializing a new session. Please check the backend connection and try again.")
-            st.session_state['session']= "valami"
+            st.session_state['session'] = None
+            st.session_state['session_init_failed'] = True
+            return
         clear_session_keys('sql_submit', 'save_success') #FIXME
         st.session_state.selected_question = {'question_id': None, 'question': None, 'sql': None, 'score': None, 'type': None, 'public': None}    
         st.rerun()
 
     
 
-    # Setup a new session on the first run
-    if 'session' not in st.session_state:
+    # Setup a new session on the first run, or recover if a partially initialized
+    # Motor object exists without a persisted session_id.
+    needs_session = (
+        'session' not in st.session_state
+        or st.session_state.get('session') is None
+        or not hasattr(st.session_state.motor, 'session_id')
+    )
+    if needs_session and not st.session_state.get('session_init_failed'):
         #TODO ask for a session label
         #TODO elaborate meta and be it json dump
         logger.info(f"Creating new session")
@@ -289,120 +347,89 @@ def prompt():
                     st.text(f"{'; '.join([f'{k}: {r.metadata[k]}' for k in r.metadata.keys()])}")
 
 
-    # Init
-    # Initialize Motor and VectorStore
-    if st.session_state.get('motor') is None:
-        st.session_state['motor'] = Motor()
-        st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init()
-        st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init()
+    if st.session_state.get('interface') != 'dbconfig':
+        # Init
+        # Initialize Motor and VectorStore
+        if st.session_state.get('motor') is None:
+            st.session_state['motor'] = Motor()
+            st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init()
+            st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init()
 
-    # if 'database_server'  in st.session_state:
-        # st.write(f"Database server config: {st.session_state.database_server}")
-        # st.write(st.session_state.get('vecstore') , st.session_state.database_server.get('title'), (st.session_state.get('vecstore') is None and st.session_state.database_server.get('title')) )
-    if st.session_state.get('vecstore') is None and 'database_server' in st.session_state:   
-        VECSTORE_PATH = os.getenv("VECSTORE_PATH", st.session_state.database_server.get('title', "kooplexquery_db"))
-        try:
-            st.session_state['vecstore'] = VectorStore(persist_directory=VECSTORE_PATH )
-            # Connect vectorstore to Motor's sync manager for automatic synchronization
-            st.session_state['motor'].vectorstore = st.session_state['vecstore']
-            logger.info("VectorStore connected to sync manager for automatic synchronization")
-        except Exception as e:
-            logger.error(f"Error initializing vector store: {e}")
-            st.error("Error initializing vector store. Please check the configuration and try again.")
-            st.session_state['vecstore'] = None
-
-    # Run one-shot automatic sync after DB connect when requested.
-    if st.session_state.get('pending_vectorstore_sync') and st.session_state.get('vecstore') is not None:
-        try:
-            # Keep sync manager bound to the latest db_chat and vectorstore.
-            st.session_state['motor']._ensure_sync_manager()
-            st.session_state['motor'].vectorstore = st.session_state['vecstore']
-
-            sync_results = st.session_state['motor'].sync_manager.resync_all()
-
-            # Also sync table/column descriptions from the active source DB.
-            table_descriptions = st.session_state['motor'].describe_tables() or ()
-            column_descriptions = st.session_state['motor'].describe_columns() or ()
-            for row in table_descriptions:
-                st.session_state['vecstore'].add_to_docs(
-                    metadatas=[{"Table": row[0], 'type': 'table_description'}],
-                    texts=[f"{row[1]}"]
-                )
-            for row in column_descriptions:
-                st.session_state['vecstore'].add_to_docs(
-                    metadatas=[{"Column": row[0], 'type': 'column_description'}],
-                    texts=[f" - ".join(row[1:])]
-                )
-
-            # Force stats to recalculate from the freshly synced vectorstore.
-            st.session_state['statistics'] = None
-            st.session_state['pending_vectorstore_sync'] = False
-            logger.info(f"Automatic vectorstore sync completed after connect: {sync_results}")
-        except Exception as e:
-            logger.error(f"Automatic vectorstore sync after connect failed: {e}")
-            st.warning("Connected, but automatic vectorstore sync failed. You can still sync manually from Metadata manager.")
-        # collections = st.session_state['vecstore'].get_collections()
+        # if 'database_server'  in st.session_state:
+            # st.write(f"Database server config: {st.session_state.database_server}")
+            # st.write(st.session_state.get('vecstore') , st.session_state.database_server.get('title'), (st.session_state.get('vecstore') is None and st.session_state.database_server.get('title')) )
+        if st.session_state.get('vecstore') is None and 'database_server' in st.session_state:   
+            VECSTORE_PATH = os.getenv("VECSTORE_PATH", st.session_state.database_server.get('title', "kooplexquery_db"))
+            try:
+                st.session_state['vecstore'] = VectorStore(persist_directory=VECSTORE_PATH )
+                # Connect vectorstore to Motor's sync manager for automatic synchronization
+                st.session_state['motor'].vectorstore = st.session_state['vecstore']
+                logger.info("VectorStore connected to sync manager for automatic synchronization")
+            except Exception as e:
+                logger.error(f"Error initializing vector store: {e}")
+                st.error("Error initializing vector store. Please check the configuration and try again.")
+                st.session_state['vecstore'] = None
         
-    # Get database metadata
-    if st.session_state.get('data_descriptor') is None:
-        try:
-            st.session_state['data_descriptor'] = st.session_state['motor'].db_chat.load_knowledge(reference='data_descriptor')
-        except Exception as e:
-            logger.error(f"Error loading data descriptor: {e}")
-            st.error("No data descriptor found.")   
+        # Get database metadata
+        if st.session_state.get('data_descriptor') is None:
+            try:
+                st.session_state['data_descriptor'] = st.session_state['motor'].db_chat.load_knowledge(reference='data_descriptor')
+            except Exception as e:
+                logger.error(f"Error loading data descriptor: {e}")
+                st.error("No data descriptor found.")   
 
-    # Get database metadata
-    if st.session_state.get('instruction') is None:
-        try:
-            st.session_state['instruction'] = st.session_state['motor'].db_chat.load_knowledge(reference='instruction')
-        except Exception as e:
-            logger.error(f"Error loading instruction: {e}")
-            st.error("No instruction found.")   
-            # st.stop()
-    if st.session_state.get('meta_schema') is None:
-        try:
-            st.session_state['meta_schema'] = st.session_state['motor'].db_chat.load_knowledge(reference='schema')
-        except Exception as e:
-            logger.error(f"Error loading database schema: {e}")
-            st.error("No database schema found.")
-            # st.stop()
-    if st.session_state.get('database_reference') is None:
-        try:
-            st.session_state['database_reference'] = st.session_state['motor'].db_chat.load_knowledge(reference='reference')
-        except Exception as e:
-            logger.error(f"Error loading database reference: {e}")
-            st.error("No database reference found.")
-            # st.stop()
-    if st.session_state.get('table_descriptions') is None:
-        try:
-            st.session_state['table_descriptions'] = st.session_state['motor'].describe_tables()
-        except Exception as e:
-            logger.error(f"Error describing tables: {e}")
-            st.error("No table descriptions found.")
-            # st.stop()
-    if st.session_state.get('column_descriptions') is None:
-        try:
-            st.session_state['column_descriptions'] = st.session_state['motor'].describe_columns()
-        except Exception as e:
-            logger.error(f"Error describing columns: {e}")
-            st.error("No column descriptions found.")
-            # st.stop()
-    if st.session_state.get('search_query') is None:
-        st.session_state['search_query'] = ""
-    
-    # which tab to show
-    if st.session_state.get('current_tab') is None:
-        st.session_state['current_tab'] = "Metadata"
+        # Get database metadata
+        if st.session_state.get('instruction') is None:
+            try:
+                st.session_state['instruction'] = st.session_state['motor'].db_chat.load_knowledge(reference='instruction')
+            except Exception as e:
+                logger.error(f"Error loading instruction: {e}")
+                st.error("No instruction found.")   
+                # st.stop()
+        if st.session_state.get('meta_schema') is None:
+            try:
+                st.session_state['meta_schema'] = st.session_state['motor'].db_chat.load_knowledge(reference='schema')
+            except Exception as e:
+                logger.error(f"Error loading database schema: {e}")
+                st.error("No database schema found.")
+                # st.stop()
+        if st.session_state.get('database_reference') is None:
+            try:
+                st.session_state['database_reference'] = st.session_state['motor'].db_chat.load_knowledge(reference='reference')
+            except Exception as e:
+                logger.error(f"Error loading database reference: {e}")
+                st.error("No database reference found.")
+                # st.stop()
+        if st.session_state.get('table_descriptions') is None:
+            try:
+                st.session_state['table_descriptions'] = st.session_state['motor'].describe_tables()
+            except Exception as e:
+                logger.error(f"Error describing tables: {e}")
+                st.error("No table descriptions found.")
+                # st.stop()
+        if st.session_state.get('column_descriptions') is None:
+            try:
+                st.session_state['column_descriptions'] = st.session_state['motor'].describe_columns()
+            except Exception as e:
+                logger.error(f"Error describing columns: {e}")
+                st.error("No column descriptions found.")
+                # st.stop()
+        if st.session_state.get('search_query') is None:
+            st.session_state['search_query'] = ""
 
-    if st.session_state.get('examples') is None:
-        try:
-            keys, examples = st.session_state['motor'].db_chat.fetch_all_examples()
-            table_examples = pd.DataFrame(examples, columns=keys)
-            st.session_state['examples'] = table_examples
-        except Exception as e:
-            logger.error(f"Error fetching examples: {e}")
-            st.error("No examples found.")
-            # st.stop()
+        # which tab to show
+        if st.session_state.get('current_tab') is None:
+            st.session_state['current_tab'] = "Metadata"
+
+        if st.session_state.get('examples') is None:
+            try:
+                keys, examples = st.session_state['motor'].db_chat.fetch_all_examples()
+                table_examples = pd.DataFrame(examples, columns=keys)
+                st.session_state['examples'] = table_examples
+            except Exception as e:
+                logger.error(f"Error fetching examples: {e}")
+                st.error("No examples found.")
+                # st.stop()
 
     # Calculate and display statitics of the stored data
     if st.session_state.get('statistics') is None and st.session_state.get('vecstore') is not None:
@@ -413,24 +440,27 @@ def prompt():
             collections_count[coll_name] = len(coll.get()['ids'])
         st.session_state['statistics'] = collections_count
 
-    # This is the container in the main window to show data triggered by buttons in the sidebar    
-    disp = st.empty()
+
 
     # Page render logic
     with st.sidebar:
         # Two buttons that switches between the chat/validator and the metadata manager view
         if st.button("Metadata manager", width='stretch'):
             st.session_state.interface = "managedb"
+            _newsession()
             st.rerun()
         if st.button("Chat", width='stretch'):
             st.session_state.interface = "chat"
+            _newsession()
             st.rerun()
         if st.button("Validator", width='stretch'):
             st.session_state.interface = "validator"
+            _newsession()
             st.rerun()
 
         if st.session_state.interface == 'managedb':
             st.title("KooplexQuery Database Management")
+            st.subheader(st.session_state['database_server'].get('title', "Database"))
             if st.button("Table and Column Descriptions"):
                 st.session_state['current_tab'] = "TableColumn"
             if st.button("Data Descriptors"):
@@ -471,34 +501,83 @@ def prompt():
 
         # List Database information
         if st.button("Database settings", width='stretch'):
-            database_configuration()
+            st.session_state['interface'] = "dbconfig"
+            # with disp.container():
+            #     dsm = DatabaseServerManager()
+            #     dsm.Database_configuration()    
+            st.rerun()
+
+
 
         if st.button("Schema browser", width='stretch'):
             show_schema_browser()
+        
+        # A dialog to save environment variables into the config.env file that is going to be loaded on the next startup to initialize the Motor
+        if st.button("Set environment variables", width='stretch'):
+            st.session_state['show_env_dialog'] = True
+            config_env_dialog()
             
+        if st.button("Reset Vectorstore", width='stretch'):
+            # Clear the vectorstore collection and resync with the latest database metadata
+            for collection in st.session_state['vecstore'].get_collections():
+                st.session_state['vecstore']._init_db(collection_name=collection).delete_collection()
+            try:
+                # Keep sync manager bound to the latest db_chat and vectorstore.
+                st.session_state['motor']._ensure_sync_manager()
+                st.session_state['motor'].vectorstore = st.session_state['vecstore']
+
+                
+
+                # Also sync table/column descriptions from the active source DB.
+                table_descriptions = st.session_state['motor'].describe_tables() or ()
+                column_descriptions = st.session_state['motor'].describe_columns() or ()
+                for row in table_descriptions:
+                    st.session_state['vecstore'].add_to_docs(
+                        metadatas=[{"Table": row[0], 'type': 'table_description'}],
+                        texts=[f"{row[1]}"]
+                    )
+                for row in column_descriptions:
+                    st.session_state['vecstore'].add_to_docs(
+                        metadatas=[{"Column": row[0], 'type': 'column_description'}],
+                        texts=[f" - ".join(row[1:])]
+                    )
+
+                sync_results = st.session_state['motor'].sync_manager.resync_all()
+
+                # Force stats to recalculate from the freshly synced vectorstore.
+                st.session_state['statistics'] = None
+                st.session_state['pending_vectorstore_sync'] = False
+                logger.info(f"Automatic vectorstore sync completed after connect: {sync_results}")
+            except Exception as e:
+                logger.error(f"Automatic vectorstore sync after connect failed: {e}")
+                st.warning("Connected, but automatic vectorstore sync failed. You can still sync manually from Metadata manager.")
+
+
     # The page body
     if st.session_state.motor is not None:
         if st.session_state.interface == 'chat':
             def show_examples(n_examples=3):
-                if st.session_state.motor.is_new_session:
-                    # Check if there are examples available and show them only if there are and we are at the start of the session
-                    if st.session_state.motor.fetch_examples(1):
-                        with example_container.container():
-                            with st.form("example_form"):
-                                st.markdown("##### _Example questions_")
-                                cols = st.columns(n_examples)
-                                def _s(prompt, sql):
-                                    st.session_state.motor.select_example(prompt, sql)
-                                    st.session_state.rerun=True
-                        
-                                for i, (_prompt, _sql) in enumerate(st.session_state.motor.fetch_examples(n_examples)):
-                                    cols[i].form_submit_button(_prompt, type="secondary", on_click=_s, args=[_prompt, _sql])
-                    else:
-                        with example_container.container():
-                                st.markdown("##### _There are no example questions yet_")
+                    if st.session_state.motor.is_new_session:
+                        # Check if there are examples available and show them only if there are and we are at the start of the session
+                        if st.session_state.motor.fetch_examples(1):
+                            with example_container.container():
+                                with st.form("example_form"):
+                                    st.markdown("##### _Example questions_")
+                                    cols = st.columns(n_examples)
+                                    def _s(prompt, sql):
+                                        st.session_state.motor.select_example(prompt, sql)
+                                        st.session_state.rerun=True
+                            
+                                    for i, (_prompt, _sql) in enumerate(st.session_state.motor.fetch_examples(n_examples)):
+                                        cols[i].form_submit_button(_prompt, type="secondary", on_click=_s, args=[_prompt, _sql])
+                        else:
+                            with example_container.container():
+                                    st.markdown("##### _There are no example questions yet_")
+
+            
 
         elif st.session_state.interface == 'validator':
-            def show_examples(n_examples=3):
+            def show_examples():
                 with example_container.container():
                     st.write("### Examples")
                     if st.session_state.motor.is_new_session:
@@ -536,6 +615,8 @@ def prompt():
                                                                     st.session_state.selected_question['sql'])
                     else:
                         st.write("There are no examples yet")
+            
+            
 
     if st.session_state.interface == 'chat' or st.session_state.interface == 'validator':
         show_examples()
@@ -840,7 +921,7 @@ def main():
 
 
 if __name__ == '__main__':
-    print("Starting the application...")
+    logger.info("Starting the application...")
     prompt()
 
     

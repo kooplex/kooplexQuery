@@ -28,6 +28,7 @@ dependencies = [
     "sqlalchemy>=2.0.44",
     "streamlit-elements>=0.1.0",
     "streamlit-extras>=0.7.8",
+    "streamlit-keyup>=0.3.0",
 ]
 
 

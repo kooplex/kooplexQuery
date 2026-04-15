@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 import streamlit as st
 import logging
 from kooplexQuery.utils.vectorstore import VectorStore
+import pandas as pd
 
 logging.basicConfig(
     filename='/tmp//app.log', 
@@ -98,7 +99,7 @@ class DatabaseServerManager:
         cursor.execute("""
             CREATE TABLE database_servers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                db_url TEXT UNIQUE,
+                db_url TEXT,
                 db_hostname TEXT,
                 db_port INTEGER,
                 db_database TEXT,
@@ -113,6 +114,7 @@ class DatabaseServerManager:
                 chat_user TEXT,
                 chat_password TEXT,
                 chat_schema TEXT,
+                UNIQUE(db_url, db_title)
                 UNIQUE(db_hostname, db_database, db_schema)
             )
         """)
@@ -120,35 +122,51 @@ class DatabaseServerManager:
         conn.close()
     
     def save_database_server(self) -> int:
-        """Save database server information. Returns the ID of the inserted record."""
+        """Save database server information. Returns the ID of the inserted or existing record."""
+        db_cfg = st.session_state['database_server']
+        chat_cfg = st.session_state['chat_database_server']
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO database_servers
+            INSERT OR IGNORE INTO database_servers
             (db_url, db_hostname, db_port, db_database, db_user, db_password, db_type, db_schema, db_title, chat_hostname, chat_port, chat_database, chat_user, chat_password, chat_schema)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                st.session_state['database_server']['url'],
-                st.session_state['database_server']['hostname'],
-                st.session_state['database_server']['port'],
-                st.session_state['database_server']['database'],
-                st.session_state['database_server']['user'],
-                st.session_state['database_server']['password'],
-                st.session_state['database_server']['type'],
-                st.session_state['database_server']['schema'],
-                st.session_state['database_server']['title'],
-                st.session_state['chat_database_server']['hostname'],
-                st.session_state['chat_database_server']['port'],
-                st.session_state['chat_database_server']['database'],
-                st.session_state['chat_database_server']['user'],
-                st.session_state['chat_database_server']['password'],
-                st.session_state['chat_database_server']['schema'],
+                db_cfg.get('url'),
+                db_cfg.get('hostname'),
+                db_cfg.get('port'),
+                db_cfg.get('database'),
+                db_cfg.get('user'),
+                db_cfg.get('password'),
+                db_cfg.get('type'),
+                db_cfg.get('schema'),
+                db_cfg.get('title'),
+                chat_cfg.get('hostname'),
+                chat_cfg.get('port'),
+                chat_cfg.get('database'),
+                chat_cfg.get('user'),
+                chat_cfg.get('password'),
+                chat_cfg.get('schema'),
             ),
         )
         conn.commit()
-        record_id = cursor.lastrowid
+
+        if cursor.rowcount > 0:
+            record_id = cursor.lastrowid
+        else:
+            if db_cfg.get('url'):
+                cursor.execute("SELECT id FROM database_servers WHERE db_url = ?", (db_cfg.get('url'),))
+            else:
+                cursor.execute(
+                    "SELECT id FROM database_servers WHERE db_hostname = ? AND db_database = ? AND db_schema = ?",
+                    (db_cfg.get('hostname'), db_cfg.get('database'), db_cfg.get('schema')),
+                )
+            row = cursor.fetchone()
+            record_id = row[0] if row else None
+
         conn.close()
         
         if record_id is None:
@@ -198,17 +216,101 @@ class DatabaseServerManager:
 
     def _update_config(self, db_cfg, chat_cfg):
 
-      
+        
         if db_cfg:
             try:
-                st.session_state['database_server'].update({ key: str(db_cfg.get(f"db_{key}", "")) for key in st.session_state['database_server'].keys() })
+                for key in st.session_state['database_server'].keys():
+                    if key in db_cfg:
+                        st.session_state['database_server'][key] = str(db_cfg[key])
+                    else:
+                        st.session_state['database_server'][key] = str(db_cfg[f"db_{key}"])
             except Exception as e:
-                st.session_state['database_server'].update({ key: str(db_cfg.get(key, "")) for key in st.session_state['database_server'].keys() })
+                logger.warning(f"Failed to update database server config with db_cfg: {e}. Attempting fallback key format.")
         if chat_cfg:
             try:
-                st.session_state['chat_database_server'].update({ key: str(chat_cfg.get(f"chat_{key}", "")) for key in st.session_state['chat_database_server'].keys() })
+                for key in st.session_state['chat_database_server'].keys():
+                    if key in chat_cfg:
+                        st.session_state['chat_database_server'][key] = str(chat_cfg[key])
+                    else:
+                        st.session_state['chat_database_server'][key] = str(chat_cfg[f"chat_{key}"])
             except Exception as e:
-                st.session_state['chat_database_server'].update({ key: str(chat_cfg.get(key, "")) for key in st.session_state['chat_database_server'].keys() })
+                logger.warning(f"Failed to update chat database server config with chat_cfg: {e}. Attempting fallback key format.")
+
+        logger.debug(f"Updated session state database_server config: {st.session_state['database_server']}")
+        logger.debug(f"Updated session state chat_database_server config: {st.session_state['chat_database_server']}")
+
+    def _connect(self):
+        try:
+            # Keep existing saved passwords when password fields are left empty.
+            self._update_config(st.session_state, st.session_state)
+
+            new_database_signature = (
+                st.session_state.get("db_url") or "",
+                st.session_state.get("db_hostname") or "",
+                int(st.session_state.get("db_port") or 5432),
+                st.session_state.get("db_database") or "",
+                st.session_state.get("db_schema") or "",
+                st.session_state.get("db_type") or "",
+            )
+            previous_database_signature = st.session_state.get("active_database_signature")
+
+            if st.session_state.get('motor') is None:
+                from kooplexQuery.motor import Motor
+                st.session_state['motor'] = object.__new__(Motor)
+                st.session_state['motor']._table_name_filter = '%'
+
+            st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init(st.session_state['database_server'])
+            st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init(st.session_state['chat_database_server'])
+            st.session_state['motor']._ensure_sync_manager()
+            st.session_state['motor_init_error'] = None
+
+            
+
+            # if not same_as_selected:
+            try:
+                self.save_database_server()
+            except Exception as e:
+                logger.warning(f"Failed to save database configuration: {e}")
+                st.warning("Database connection was successful, but failed to save the configuration. Please check the logs for details.")
+
+            if previous_database_signature != new_database_signature:
+                vecstore = st.session_state.get("vecstore")
+                if vecstore is not None:
+                    try:
+                        vecstore.reset()
+                    except Exception as e:
+                        logger.warning(f"Failed to reset existing vector store: {e}")
+
+                st.session_state["vecstore"] = None
+                st.session_state["statistics"] = None
+                st.session_state["data_descriptor"] = None
+                st.session_state["instruction"] = None
+                # st.session_state["db_schema"] = None
+                st.session_state["database_reference"] = None
+                st.session_state["table_descriptions"] = None
+                st.session_state["column_descriptions"] = None
+                st.session_state["examples"] = None
+                st.session_state['interface'] = "chat"
+                st.session_state["active_database_signature"] = new_database_signature
+                logger.info("Database changed; vector store reset for the newly loaded database")
+
+            # Start a fresh chat session immediately after successful connect.
+            st.session_state['db_config_set'] = True
+            st.session_state['session_init_failed'] = False
+            # Force prompt flow to create a fresh chat session for the (possibly reconfigured)
+            # Motor instance so attributes like session_id are always present.
+            st.session_state.pop('session', None)
+            # Always trigger one-shot automatic sync into vectorstore after connect.
+            st.session_state['pending_vectorstore_sync'] = True
+                # st.success("Database connection updated. Existing configuration unchanged, so it was not saved again. New session started.")
+                # st.success("Database connection updated, configuration saved, and a new session started.")
+            st.rerun()
+        except Exception as e:
+            st.error(       
+                f"Connection or session initialization failed: {e}. "
+                "Please open Database settings and try connecting again."
+            )
+            raise
 
     # Pop up dialogs
     # @st.dialog("Database Configuration")
@@ -294,12 +396,16 @@ class DatabaseServerManager:
 
                 db_cfg = uploaded_config.get("database_server", uploaded_config)
                 chat_cfg = uploaded_config.get("chat_database_server", uploaded_config)
-                
+                # print("Parsed db config:", db_cfg
+                        # , "Parsed chat db config:", chat_cfg)
                 self._update_config(db_cfg, chat_cfg)
+                # print("Updated session state with uploaded config:", st.session_state['database_server'], st.session_state['chat_database_server'])
                 self.save_database_server()
                
                 st.success("Config file loaded successfully.")
                 uploaded_config_file = None  # Clear the file uploader after successful upload
+                st.session_state['selected_db_index'] = len(self.get_all_database_servers())-1 if self.get_all_database_servers() else 0
+                # st.rerun()  # Refresh the page to update the selected config and form fields
             except Exception as e:
                 # st.error(f"Failed to parse uploaded config: {e}")
                 st.error(f"Config already exists or failed to save: {e}. Please check the file format and contents, and ensure it doesn't duplicate an existing configuration.")
@@ -320,17 +426,22 @@ class DatabaseServerManager:
 
         # Load configuration 
         database_configs = self.get_all_database_servers()
+        logger.debug(f"Available database configs: {len(database_configs)}")
         with select_col:
             selected_db = st.selectbox("Select Database config",
                     database_configs,
                     key="selected_config",
                     format_func=lambda x: f"{x.get('db_title', 'Untitled')} - {x.get('type', '')}",
-                    index=0 if database_configs else -1,
+                    index=st.session_state.get('selected_db_index', 0) if database_configs else 0,
                     on_change=on_model_selection_change,
+                    placeholder='None available, please add a config'
                     )
             # if st.session_state.database_server.get("title") is None and database_configs:
                 # self._update_config(st.session_state.selected_db, st.session_state.selected_db)
             self._update_config(st.session_state.selected_config, st.session_state.selected_config)
+            st.session_state['selected_db_index'] = self.get_all_database_servers().index(st.session_state.selected_config) if st.session_state.selected_config in self.get_all_database_servers() else 0
+            logger.info(f"Selected DB config: {st.session_state['selected_db_index']}")
+            # st.stop()
 
 
         if yaml is not None:
@@ -351,8 +462,8 @@ class DatabaseServerManager:
                 key="download_config_yaml",
             )
 
-            can_delete_selected = bool(selected_db and selected_db.get("id") is not None)
-            if st.button("Delete config", key="delete_selected_config", disabled=not can_delete_selected):
+            if st.button("Delete config", key="delete_selected_config", disabled=self.get_all_database_servers() == [] ):
+                st.session_state['selected_db_index'] = 0
                 if self.delete_database_server(int(selected_db["id"])):
                     st.success("Selected database config deleted.")
                     st.rerun()
@@ -360,8 +471,12 @@ class DatabaseServerManager:
                     st.warning("Could not delete selected config.")
 
         # Type manually connection details to connect to a database, and update the connection when submitted
-        col1, col2 = st.columns(2)
+        
         with st.form("db_info_form"):
+            if st.form_submit_button("Connect"):
+                    self._connect()
+                    st.success("Database connection updated, configuration saved, and a new session started.")
+            col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Database server")
                 # Use session state value if it exists, otherwise use selected_db value (avoids Streamlit widget warning)
@@ -382,70 +497,5 @@ class DatabaseServerManager:
                 text_field(label="Port", value=st.session_state.chat_database_server.get("port"), key="chat_port")
                 text_field(label="Database", value=st.session_state.chat_database_server.get("database"), key="chat_database")
                 text_field(label="Schema", value=st.session_state.chat_database_server.get("schema"), key="chat_schema")
-            if st.form_submit_button("Connect"):
-                        try:
-                            # Keep existing saved passwords when password fields are left empty.
-                            self._update_config(st.session_state, st.session_state)
-
-                            new_database_signature = (
-                                st.session_state.get("db_url") or "",
-                                st.session_state.get("db_hostname") or "",
-                                int(st.session_state.get("db_port") or 5432),
-                                st.session_state.get("db_database") or "",
-                                st.session_state.get("db_schema") or "",
-                                st.session_state.get("db_type") or "",
-                            )
-                            previous_database_signature = st.session_state.get("active_database_signature")
-
-                            if st.session_state.get('motor') is None:
-                                from kooplexQuery.motor import Motor
-                                st.session_state['motor'] = object.__new__(Motor)
-                                st.session_state['motor']._table_name_filter = '%'
-
-                            st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init(st.session_state['database_server'])
-                            st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init(st.session_state['chat_database_server'])
-                            st.session_state['motor']._ensure_sync_manager()
-                            st.session_state['motor_init_error'] = None
-
-                            
-
-                            # if not same_as_selected:
-                            try:
-                                self.save_database_server()
-                            except Exception as e:
-                                logger.warning(f"Failed to save database configuration: {e}")
-                                st.warning("Database connection was successful, but failed to save the configuration. Please check the logs for details.")
-
-                            if previous_database_signature != new_database_signature:
-                                vecstore = st.session_state.get("vecstore")
-                                if vecstore is not None:
-                                    try:
-                                        vecstore.reset()
-                                    except Exception as e:
-                                        logger.warning(f"Failed to reset existing vector store: {e}")
-
-                                st.session_state["vecstore"] = None
-                                st.session_state["statistics"] = None
-                                st.session_state["data_descriptor"] = None
-                                st.session_state["instruction"] = None
-                                # st.session_state["db_schema"] = None
-                                st.session_state["database_reference"] = None
-                                st.session_state["table_descriptions"] = None
-                                st.session_state["column_descriptions"] = None
-                                st.session_state["examples"] = None
-                                st.session_state["active_database_signature"] = new_database_signature
-                                logger.info("Database changed; vector store reset for the newly loaded database")
-
-                            # Start a fresh chat session immediately after successful connect.
-                            st.session_state['db_config_set'] = True
-                            # Always trigger one-shot automatic sync into vectorstore after connect.
-                            st.session_state['pending_vectorstore_sync'] = True
-                                # st.success("Database connection updated. Existing configuration unchanged, so it was not saved again. New session started.")
-                                # st.success("Database connection updated, configuration saved, and a new session started.")
-                            st.rerun()
-                        except Exception as e:
-                            raise
-                            st.error(
-                                f"Connection or session initialization failed: {e}. "
-                                "Please open Database settings and try connecting again."
-                            )
+            
+                        
