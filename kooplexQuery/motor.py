@@ -12,6 +12,9 @@ logging.basicConfig(
     filename='/tmp/app.log', 
     level=logging.DEBUG
 )
+# Suppress verbose file-watcher debug noise from Streamlit/watchdog.
+logging.getLogger("watchdog").setLevel(logging.WARNING)
+logging.getLogger("watchdog.observers.inotify_buffer").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 _ge = lambda x,d: os.getenv(x, d)
 
@@ -64,7 +67,8 @@ class Motor(object):
         if not hasattr(self, 'sync_manager') or self.sync_manager is None:
             self.sync_manager = VectorStoreSyncManager(db_chat=getattr(self, 'db_chat', None))
             logger.info("Sync manager initialized lazily")
-        elif getattr(self.sync_manager, 'db_chat', None) is None and hasattr(self, 'db_chat'):
+        elif hasattr(self, 'db_chat') and getattr(self.sync_manager, 'db_chat', None) is not self.db_chat:
+            # Rebind after DB reconnection so sync uses the active chat DB config.
             self.sync_manager.set_db_chat(self.db_chat)
         return self.sync_manager
 
@@ -90,7 +94,12 @@ class Motor(object):
 
     @current_model.setter
     def current_model(self, model_name):
-        if self.current_model!=model_name:
+        needs_init = (
+            self.current_model != model_name
+            or not hasattr(self, '_llm_agent')
+            or self._llm_agent is None
+        )
+        if needs_init:
             from langchain_openai import ChatOpenAI
             logger.info (f"Changed to model {model_name}")
             # Distinguish between openai and ollama models based on the name
@@ -105,6 +114,7 @@ class Motor(object):
                 self._llm_agent = ChatOpenAI(
                         temperature=0, openai_api_key="fdsfs", streaming=True, 
                         model_name=model_name, openai_api_base=f"http://{_h}:{_p}/v1")
+                logger.info(f"Ollama API base set to http://{_h}:{_p}/v1 for model {model_name}")
 
     @property
     def sql(self):
@@ -230,7 +240,8 @@ class Motor(object):
         statement=getattr(error, 'statement', None)
         prompt = f"Correct the SQL query\n{statement}\nbecause: {detail}"
         t0=time.time()
-        # self.current_model=model_name
+        # Ensure llm agent exists even if no prior chat() call happened.
+        self.current_model=model_name
         self._chat_history.add_user_message(prompt, metadata={'timestamp': t0, 'model': self.current_model })
         collected=""
         async for chunk in self._llm_agent.astream(prompt):
@@ -315,7 +326,8 @@ User instructions for plotting: {instruction_prompt}
         Just provide the question without any extra explanation.
         """
 #logger.info(f"Generating THE question with: {prompt}")
-        # self.current_model=model_name
+        # Ensure llm agent exists even if save flow starts before any chat() call.
+        self.current_model=model_name
         collected=""
         async for chunk in self._llm_agent.astream(prompt):
             if c:=chunk.content:

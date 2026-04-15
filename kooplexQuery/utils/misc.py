@@ -11,6 +11,9 @@ logging.basicConfig(
     filename='/tmp//app.log', 
     level=logging.DEBUG
 )
+# Suppress verbose file-watcher debug noise from Streamlit/watchdog.
+logging.getLogger("watchdog").setLevel(logging.WARNING)
+logging.getLogger("watchdog.observers.inotify_buffer").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.debug("START")
 
@@ -262,6 +265,7 @@ class DatabaseServerManager:
             st.session_state['motor'].db_source = st.session_state['motor']._dbtarget_init(st.session_state['database_server'])
             st.session_state['motor'].db_chat = st.session_state['motor']._dbchat_init(st.session_state['chat_database_server'])
             st.session_state['motor']._ensure_sync_manager()
+            st.session_state['motor'].sync_manager.set_db_chat(st.session_state['motor'].db_chat)
             st.session_state['motor_init_error'] = None
 
             
@@ -462,7 +466,7 @@ class DatabaseServerManager:
                 key="download_config_yaml",
             )
 
-            if st.button("Delete config", key="delete_selected_config", disabled=self.get_all_database_servers() == [] ):
+            if st.button("Delete config", key="delete_selected_config", disabled=self.get_all_database_servers() == [], type="primary"):
                 st.session_state['selected_db_index'] = 0
                 if self.delete_database_server(int(selected_db["id"])):
                     st.success("Selected database config deleted.")
@@ -473,7 +477,7 @@ class DatabaseServerManager:
         # Type manually connection details to connect to a database, and update the connection when submitted
         
         with st.form("db_info_form"):
-            if st.form_submit_button("Connect"):
+            if st.form_submit_button("Connect", type="primary"):
                     self._connect()
                     st.success("Database connection updated, configuration saved, and a new session started.")
             col1, col2 = st.columns(2)

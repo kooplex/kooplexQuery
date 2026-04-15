@@ -24,6 +24,9 @@ logging.basicConfig(
     filename='/tmp//app.log', 
     level=logging.DEBUG
 )
+# Suppress verbose file-watcher debug noise from Streamlit/watchdog.
+logging.getLogger("watchdog").setLevel(logging.WARNING)
+logging.getLogger("watchdog.observers.inotify_buffer").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.debug("START")
 
@@ -73,22 +76,35 @@ def prompt():
         st.markdown("### Set environment variables for database connection")
         st.markdown("These variables will be saved into the `config.env` file and loaded on the next startup to initialize the Motor. After setting these, please restart the app.")
         env_vars = {
-            "OPENAI_API_KEY": "OpenAI API key",
-            "OLLAMA_LOCAL_HOST": "Ollama local host",
-            "OLLAMA_LOCAL_PORT": "Ollama local port",
-            "ANTHROPIC_API_KEY": "Anthropic API key",
+            "OPENAI_API_KEY": {"value": "OpenAI API key", "type": "password"},
+            "OLLAMA_HOST": {"value": "Ollama host", "type": "default"},
+            "OLLAMA_PORT": {"value": "Ollama port", "type": "default"},
+            "ANTHROPIC_API_KEY": {"value": "Anthropic API key", "type": "password"},
         }
+        #if config.env file exists, load existing values as defaults
+        export_env_variables()
+        for var in env_vars.keys():
+            env_vars[var]['value'] = os.getenv(var, "")
         new_values = {}
-        for var, desc in env_vars.items():
-            new_values[var] = st.text_input(desc, key=var)
+        for var, field in env_vars.items():
+            new_values[var] = st.text_input(var, value=field["value"], type=field["type"])
         
         if st.button("Save environment variables"):
             save_env_variables(new_values)
+            export_env_variables()
             st.success("Environment variables saved! Please restart the app for changes to take effect.")
+
+    def export_env_variables():
+        config_path = "./config.env"
+        if os.path.exists(config_path):
+            load_dotenv(config_path)
+        else:
+            st.warning("No config.env file found to export.")
 
     def save_env_variables(new_values):
         st.session_state['environment_variables_set'] = False
-        config_path = Path(__file__).parent.parent / "config.env"
+        # config_path = Path(__file__).parent.parent / "config.env"
+        config_path =  "./config.env"
         with open(config_path, "w") as f:
             for var, value in new_values.items():
                 f.write(f"{var}={value}\n")
