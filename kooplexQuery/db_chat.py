@@ -203,6 +203,7 @@ on q.id=a.question_id;
             return keys, data
     
     def delete_row(self, question_id):
+        question_id = int(question_id)
         with self.engine.begin() as con:
             # Step 1: Delete from child table first (chat.query)
             ddl = f"""
@@ -228,6 +229,7 @@ WHERE id = :question_id  """
         it adds this row to the training set, makes it public and adds 1 to the overall score
         A next validation eill further increase it's score
         """
+        question_id = int(question_id)
         with self.engine.begin() as con:
             ddl = f"""
 UPDATE {self.schema}.query

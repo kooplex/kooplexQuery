@@ -487,7 +487,8 @@ def prompt():
                 st.session_state['current_tab'] = "Search in the whole VectorStore"
         elif st.session_state.interface == 'chat' or st.session_state.interface == 'validator' :
             page_title = os.getenv("TITLE", "KooplexQuery - Text2SQL with LLMs")
-            st.title(page_title)
+            st.title(st.session_state['database_server'].get('title', page_title))
+            st.subheader(page_title)
             
             if st.button("New Session", width='stretch', disabled=st.session_state.motor.is_new_session):
                 _newsession()
@@ -506,7 +507,7 @@ def prompt():
 
             if st.session_state.interface == 'validator':
                 if st.button("Delete", width='stretch', disabled=not st.session_state.selected_question['question']):
-                    st.session_state.motor.db_chat.delete_row(st.session_state.selected_question['question_id'])
+                    st.session_state.motor.db_chat.delete_row(int(st.session_state.selected_question['question_id']))
                     _newsession()
 
                 if st.button("Validate", width='stretch', disabled=not st.session_state.selected_question['question']):

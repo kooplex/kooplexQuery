@@ -254,6 +254,7 @@ class DatabaseServerManager:
                 st.session_state.get("db_database") or "",
                 st.session_state.get("db_schema") or "",
                 st.session_state.get("db_type") or "",
+                st.session_state.get("db_title") or "",
             )
             previous_database_signature = st.session_state.get("active_database_signature")
 
@@ -307,7 +308,7 @@ class DatabaseServerManager:
             # Always trigger one-shot automatic sync into vectorstore after connect.
             st.session_state['pending_vectorstore_sync'] = True
                 # st.success("Database connection updated. Existing configuration unchanged, so it was not saved again. New session started.")
-                # st.success("Database connection updated, configuration saved, and a new session started.")
+            st.success("Database connection updated, configuration saved, and a new session started.")
             st.rerun()
         except Exception as e:
             st.error(       
@@ -459,14 +460,14 @@ class DatabaseServerManager:
             safe_download_title = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in download_title).strip("_")
             safe_download_title = safe_download_title or "database_config"
             st.download_button(
-                label="Download config (yaml)",
+                label="📥",
                 data=yaml_content,
                 file_name=f"{safe_download_title}.yaml",
                 mime="application/x-yaml",
                 key="download_config_yaml",
             )
 
-            if st.button("Delete config", key="delete_selected_config", disabled=self.get_all_database_servers() == [], type="primary"):
+            if st.button("🗑️", key="delete_selected_config", disabled=self.get_all_database_servers() == []):
                 st.session_state['selected_db_index'] = 0
                 if self.delete_database_server(int(selected_db["id"])):
                     st.success("Selected database config deleted.")
@@ -477,7 +478,7 @@ class DatabaseServerManager:
         # Type manually connection details to connect to a database, and update the connection when submitted
         
         with st.form("db_info_form"):
-            if st.form_submit_button("Connect", type="primary"):
+            if st.form_submit_button("🔌 Connect"):
                     self._connect()
                     st.success("Database connection updated, configuration saved, and a new session started.")
             col1, col2 = st.columns(2)
