@@ -13,12 +13,13 @@ from st_keyup import st_keyup
 import logging
 import time
 from kooplexQuery.motor import Motor, supported_models
-from utils import *
+from .utils import *
 import asyncio
 import uuid
 import sys
 import os
 from pathlib import Path
+import pandas as pd
 
 logging.basicConfig(
     filename='/tmp//app.log', 

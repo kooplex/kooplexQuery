@@ -117,8 +117,7 @@ class DatabaseServerManager:
                 chat_user TEXT,
                 chat_password TEXT,
                 chat_schema TEXT,
-                UNIQUE(db_url, db_title)
-                UNIQUE(db_hostname, db_database, db_schema)
+                UNIQUE(db_title)
             )
         """)
         conn.commit()

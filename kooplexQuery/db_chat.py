@@ -256,7 +256,8 @@ WHERE id = :question_id
 
     # Functions for creating and managing the database schema
     def create_schema(self):
-
+        from dotenv import load_dotenv
+        load_dotenv("config.env")
         # Connect with schema manager role to create the schema
         import os
         _ge = lambda x,d: os.getenv(x, d)
