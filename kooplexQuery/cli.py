@@ -62,9 +62,9 @@ if __name__ == '__main__':
 
     if args.command=="list":
         if args.what=="models":
-            from motor import supported_models
-            for m in supported_models:
-                print(m.name)
+            from motor import list_llm_models
+            for model in list_llm_models():
+                print(model.model_name)
         elif args.what=="example":
             motor = init_motor()
             _q, _sql = motor.fetch_examples(1)[0]

@@ -4,7 +4,8 @@ import json
 from typing import List, Dict, Optional
 import streamlit as st
 import logging
-from kooplexQuery.utils.vectorstore import VectorStore
+from .vectorstore import VectorStore
+from kooplexQuery.db_chat import DBChat
 import pandas as pd
 
 logging.basicConfig(
@@ -477,9 +478,32 @@ class DatabaseServerManager:
         # Type manually connection details to connect to a database, and update the connection when submitted
         
         with st.form("db_info_form"):
-            if st.form_submit_button("🔌 Connect"):
-                    self._connect()
-                    st.success("Database connection updated, configuration saved, and a new session started.")
+            action_col1, action_col2 = st.columns(2)
+            with action_col1:
+                connect_requested = st.form_submit_button("🔌 Connect")
+            with action_col2:
+                create_chat_db_requested = st.form_submit_button("🛠️ Create chat database")
+
+            if connect_requested:
+                self._connect()
+                st.success("Database connection updated, configuration saved, and a new session started.")
+
+            if create_chat_db_requested:
+                self._update_config(st.session_state, st.session_state)
+                try:
+                    created = DBChat.create_database_if_missing(
+                        hostname=st.session_state.get("chat_hostname") or st.session_state.chat_database_server.get("hostname"),
+                        port=int(st.session_state.get("chat_port") or st.session_state.chat_database_server.get("port") or 5432),
+                        database=st.session_state.get("chat_database") or st.session_state.chat_database_server.get("database"),
+                    )
+                    if created:
+                        st.success("Chat database created successfully. Click Connect to initialize schema and tables.")
+                    else:
+                        st.info("Chat database already exists. Click Connect to continue.")
+                except Exception as e:
+                    logger.error(f"Failed to create chat database from Database settings: {e}")
+                    st.error(f"Could not create chat database: {e}")
+
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("Database server")

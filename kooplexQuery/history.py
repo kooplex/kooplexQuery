@@ -41,7 +41,15 @@ class CustomChatHistory(BaseChatMessageHistory):
         if content == "":
             return
 
-        self.messages_with_meta.append(
+        if self.messages_with_meta and self.messages_with_meta[0].message.type == "system":
+            first = self.messages_with_meta[0]
+            first.message = SystemMessage(content=f"{first.message.content}\n\n{content}")
+            if metadata:
+                first.metadata.update(metadata)
+            return
+
+        self.messages_with_meta.insert(
+            0,
             MessageWithMeta(SystemMessage(content=content), metadata or {})
         )
 

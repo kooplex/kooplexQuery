@@ -48,8 +48,7 @@ kooplexquery = "kooplexquery.prompt"
 #sqlvalidator = "sqlValidator.sql_validator_app"
 
 [tool.setuptools.packages.find]
-include = ["kooplexQuery*", "utils*"]
-exclude = ["src_archived*", "sqlValidator*"]
+include = ["kooplexQuery*"]
 
 [project.scripts]
 kooplexquery = "kooplexQuery.prompt:main"

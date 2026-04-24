@@ -1,6 +1,44 @@
 from sqlalchemy import create_engine, text
 
 class DBChat(object):
+    @staticmethod
+    def create_database_if_missing(hostname, port, database):
+        from dotenv import load_dotenv
+        import os
+
+        load_dotenv("config.env")
+
+        schema_manager = os.getenv('CHAT_SCHEMA_MANAGER', 'schema_manager')
+        schema_manager_password = os.getenv('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
+
+        if (
+            not database
+            or not database.replace("_", "").isalnum()
+            or not database[0].isalpha()
+        ):
+            raise ValueError(f"Invalid chat database name: {database}")
+
+        connectionstring = (
+            f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}"
+            f"@{hostname}:{port}/postgres"
+        )
+        engine = create_engine(connectionstring, isolation_level="AUTOCOMMIT")
+
+        try:
+            with engine.connect() as con:
+                exists = con.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :dbname"),
+                    {'dbname': database},
+                ).scalar() is not None
+
+                if exists:
+                    return False
+
+                con.execute(text(f"CREATE DATABASE {database}"))
+                return True
+        finally:
+            engine.dispose()
+
     def __init__(self, hostname, port, database, schema, user, password, generated_callback=lambda c: None):
         connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
         
@@ -112,6 +150,18 @@ WHERE reference=:reference
         with self.engine.connect() as con:
             r=con.execute(q, {'reference': reference})
             return r.scalar()
+
+    def fetch_all_knowledge(self):
+        q = text("""
+SELECT id, reference, content
+FROM knowledge
+ORDER BY reference, id
+        """)
+        with self.engine.connect() as con:
+            result = con.execute(q)
+            keys = result.keys()
+            data = result.fetchall()
+            return keys, data
 
     # FIXME update instead of insert with conflict handling
     def save_knowledge(self, reference, content):
@@ -452,7 +502,7 @@ if __name__ == '__main__':
         print(session_id)
     elif args.command == "conversation":
         print(f"(in session {args.session_id}) [user says: {args.user_content} and agent replies {args.agent_content}")
-        chatter.save_chat_item(session_id=args.session_id, user_prompt=args.user_content, agent_response=args.agent_content)
+        chatter.save_chat_item(session_id=args.session_id, user_prompt=args.user_content, agent_response=args.agent_content, model_name="cli")
     elif args.command == "finalize":
         print(f"Finalizing session {args.session_id} {args.question} |-> {args.sql}")
         chatter.save_query(session_id=args.session_id, question_content=args.question, sql=args.sql)

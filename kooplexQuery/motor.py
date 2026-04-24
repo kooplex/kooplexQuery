@@ -1,9 +1,13 @@
 import time
+import asyncio
 from dataclasses import dataclass
 import os
+from pathlib import Path
+import sqlite3
 from typing import Iterator, List, Dict, Any
 import logging
 import re
+from urllib.parse import urlparse
 from kooplexQuery.db_chat import DBChat
 from kooplexQuery.db import DBQuery
 from kooplexQuery.utils.sync_manager import VectorStoreSyncManager
@@ -20,24 +24,163 @@ _ge = lambda x,d: os.getenv(x, d)
 
 @dataclass
 class LLM_Model:
-    type: str
-    name: str
+    provider: str
+    model_name: str
 
 @dataclass
 class Content_Chunk:
     type: str
     content: str
 
-supported_models=[
-    LLM_Model('openai', 'gpt-4.1-mini'),
-    LLM_Model('openai', 'gpt-5.1-mini'),
-    LLM_Model('ollama', 'qwen2.5-coder:14b'),
-    LLM_Model('ollama', 'llama3.1'),
-    LLM_Model('ollama', 'qwen2.5-coder:3b'),
-    LLM_Model('vllm', 'Qwen/Qwen2.5-coder-3b'),
-    LLM_Model('ollama', 'qwen2.5-coder:7b'),
-    LLM_Model('ollama', 'hf.co/defog/sqlcoder-6b-2:Q5_K_M'),
-]
+
+DEFAULT_LLM_MODEL = LLM_Model(provider='openai', model_name='gpt-4.1-mini')
+
+
+def _llm_models_db_path() -> Path:
+    return Path(os.getenv('LLM_MODELS_DB_PATH', os.path.join(os.getcwd(), 'llm_models.sqlite3')))
+
+
+def _normalize_ollama_base_url(provider: str | None = None) -> str:
+    raw_provider = provider or _ge('OLLAMA_HOST', 'http://localhost')
+    if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', raw_provider):
+        raw_provider = f'http://{raw_provider}'
+    parsed = urlparse(raw_provider)
+    if parsed.port is None:
+        raw_provider = f"{raw_provider.rstrip('/')}:{int(_ge('OLLAMA_PORT', 11434))}"
+    normalized = raw_provider.rstrip('/')
+    if not normalized.endswith('/v1'):
+        normalized = f'{normalized}/v1'
+    return normalized
+
+
+def is_provider_url(provider: str) -> bool:
+    return bool(re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', provider))
+
+
+def default_provider_for_model(model_name: str) -> str:
+    if model_name.startswith('gpt-'):
+        return 'openai'
+    return _normalize_ollama_base_url()
+
+
+def _ensure_llm_models_db() -> Path:
+    db_path = _llm_models_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                UNIQUE(model_name, provider)
+            )
+            """
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO llm_models (model_name, provider) VALUES (?, ?)",
+            (DEFAULT_LLM_MODEL.model_name, DEFAULT_LLM_MODEL.provider),
+        )
+        con.commit()
+    return db_path
+
+
+def list_llm_models() -> List[LLM_Model]:
+    db_path = _ensure_llm_models_db()
+    with sqlite3.connect(db_path) as con:
+        rows = con.execute(
+            """
+            SELECT provider, model_name
+            FROM llm_models
+            ORDER BY CASE WHEN provider = 'openai' THEN 0 ELSE 1 END, LOWER(model_name)
+            """
+        ).fetchall()
+    return [LLM_Model(provider=provider, model_name=model_name) for provider, model_name in rows]
+
+
+def add_llm_model(model_name: str, provider: str | None = None) -> LLM_Model:
+    normalized_name = model_name.strip()
+    if not normalized_name:
+        raise ValueError('Model name cannot be empty.')
+    normalized_provider = provider.strip() if provider else default_provider_for_model(normalized_name)
+    if is_provider_url(normalized_provider):
+        normalized_provider = _normalize_ollama_base_url(normalized_provider)
+    db_path = _ensure_llm_models_db()
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            "INSERT OR IGNORE INTO llm_models (model_name, provider) VALUES (?, ?)",
+            (normalized_name, normalized_provider),
+        )
+        con.commit()
+    return LLM_Model(provider=normalized_provider, model_name=normalized_name)
+
+
+def delete_llm_model(model_name: str, provider: str | None = None) -> bool:
+    normalized_name = model_name.strip()
+    if not normalized_name:
+        raise ValueError('Model name cannot be empty.')
+    normalized_provider = provider.strip() if provider else None
+    if normalized_provider and is_provider_url(normalized_provider):
+        normalized_provider = _normalize_ollama_base_url(normalized_provider)
+
+    db_path = _ensure_llm_models_db()
+    with sqlite3.connect(db_path) as con:
+        if normalized_provider:
+            cur = con.execute(
+                "DELETE FROM llm_models WHERE model_name = ? AND provider = ?",
+                (normalized_name, normalized_provider),
+            )
+        else:
+            cur = con.execute(
+                "DELETE FROM llm_models WHERE model_name = ?",
+                (normalized_name,),
+            )
+        con.commit()
+        deleted = cur.rowcount > 0
+
+    # Keep at least one default option available.
+    _ensure_llm_models_db()
+    return deleted
+
+
+def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
+    if isinstance(model, LLM_Model):
+        return model
+
+    # Streamlit/session objects may carry model-like instances that are not the
+    # exact LLM_Model class identity in this module; normalize by attributes.
+    model_name_attr = getattr(model, 'model_name', None)
+    provider_attr = getattr(model, 'provider', None)
+    if model_name_attr:
+        normalized_model_name = str(model_name_attr).strip()
+        if not normalized_model_name:
+            return DEFAULT_LLM_MODEL
+        normalized_provider = (
+            str(provider_attr).strip() if provider_attr else default_provider_for_model(normalized_model_name)
+        )
+        if is_provider_url(normalized_provider):
+            normalized_provider = _normalize_ollama_base_url(normalized_provider)
+        return LLM_Model(provider=normalized_provider, model_name=normalized_model_name)
+
+    if not model:
+        return DEFAULT_LLM_MODEL
+
+    normalized_model_name = str(model).strip()
+    if not normalized_model_name:
+        return DEFAULT_LLM_MODEL
+
+    db_path = _ensure_llm_models_db()
+    with sqlite3.connect(db_path) as con:
+        row = con.execute(
+            "SELECT provider, model_name FROM llm_models WHERE model_name = ? ORDER BY id LIMIT 1",
+            (normalized_model_name,),
+        ).fetchone()
+    if row is not None:
+        return LLM_Model(provider=row[0], model_name=row[1])
+    return LLM_Model(
+        provider=default_provider_for_model(normalized_model_name),
+        model_name=normalized_model_name,
+    )
 
 
 
@@ -93,7 +236,9 @@ class Motor(object):
         return getattr(self, '_model', None)
 
     @current_model.setter
-    def current_model(self, model_name):
+    def current_model(self, model):
+        resolved_model = resolve_llm_model(model)
+        model_name = resolved_model.model_name
         needs_init = (
             self.current_model != model_name
             or not hasattr(self, '_llm_agent')
@@ -102,19 +247,17 @@ class Motor(object):
         if needs_init:
             from langchain_openai import ChatOpenAI
             logger.info (f"Changed to model {model_name}")
-            # Distinguish between openai and ollama models based on the name
-            if model_name.startswith('gpt-'):
-                self._model=model_name
+            self._model=model_name
+            self._model_provider = resolved_model.provider
+            if is_provider_url(resolved_model.provider):
+                ollama_base_url = _normalize_ollama_base_url(resolved_model.provider)
                 self._llm_agent = ChatOpenAI(
-                    temperature=0, openai_api_key=_ge("OPENAI_API_KEY", "fdsfs"), streaming=True, model_name=model_name)
+                        temperature=0, api_key=lambda: "fdsfs", streaming=True,
+                        model=model_name, base_url=ollama_base_url)
+                logger.info(f"Ollama API base set to {ollama_base_url} for model {model_name}")
             else:
-                _h=_ge("OLLAMA_HOST", "localhost")
-                _p=int(_ge("OLLAMA_PORT", 11434))
-                self._model=model_name
                 self._llm_agent = ChatOpenAI(
-                        temperature=0, openai_api_key="fdsfs", streaming=True, 
-                        model_name=model_name, openai_api_base=f"http://{_h}:{_p}/v1")
-                logger.info(f"Ollama API base set to http://{_h}:{_p}/v1 for model {model_name}")
+                    temperature=0, api_key=lambda: _ge("OPENAI_API_KEY", "fdsfs"), streaming=True, model=model_name)
 
     @property
     def sql(self):
@@ -187,15 +330,29 @@ class Motor(object):
             logger.error(f"Error loading knowledge: {e}")
             context = ""
         self._chat_history=CustomChatHistory()
-        self._chat_history.add_system_message(context)
+        default_instruction = (
+            "You are a helpful assistant that translates natural language questions into SQL queries. "
+            "Always try to answer the question with a SQL query based on the provided database schema "
+            "and data description. If the question is not clear, ask for clarification. Always use the "
+            "provided schema and data description to inform your SQL generation. Do not make up any "
+            "information about the database that is not included in the schema or data description."
+        )
+
+        # Some vLLM/HF chat templates allow at most one system message at the beginning.
+        system_parts = []
+        if context:
+            system_parts.append(context)
         try:
-            self._chat_history.add_system_message(self.db_chat.load_knowledge(reference='instruction'))
+            instruction = self.db_chat.load_knowledge(reference='instruction')
         except Exception as e:
             logger.error(f"Error loading instruction knowledge: {e}")
-            self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
-        # In case the chat db was not properly initialized and there are no instructions, we add a default one
-        if len(self._chat_history.messages)==1:
-            self._chat_history.add_system_message("You are a helpful assistant that translates natural language questions into SQL queries. Always try to answer the question with a SQL query based on the provided database schema and data description. If the question is not clear, ask for clarification. Always use the provided schema and data description to inform your SQL generation. Do not make up any information about the database that is not included in the schema or data description.")
+            instruction = default_instruction
+        if instruction:
+            system_parts.append(instruction)
+        if not system_parts:
+            system_parts.append(default_instruction)
+
+        self._chat_history.add_system_message("\n\n".join(system_parts))
         self._plot_history=CustomChatHistory()
         self._plot_history.add_system_message("""You are a helper to create plots.""")
         chromadb.api.client.SharedSystemClient.clear_system_cache() #TODO test if really required parrallel runs
@@ -223,7 +380,7 @@ class Motor(object):
             self.sql=sql
 
 
-    async def chat(self, prompt, model_name='qwen2.5-coder:14b'):
+    async def chat(self, prompt, model_name=DEFAULT_LLM_MODEL):
         t0=time.time()
         self.current_model=model_name
         self._chat_history.add_user_message(prompt, metadata={'timestamp': t0, 'model': self.current_model })
@@ -235,7 +392,7 @@ class Motor(object):
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
         self.db_chat.save_chat_item(self.session_id, prompt, collected, self.current_model)
 
-    async def correct_error(self, error, model_name='qwen2.5-coder:14b'):
+    async def correct_error(self, error, model_name=DEFAULT_LLM_MODEL):
         detail=getattr(error, 'orig', None)
         statement=getattr(error, 'statement', None)
         prompt = f"Correct the SQL query\n{statement}\nbecause: {detail}"
@@ -250,7 +407,7 @@ class Motor(object):
                 yield c
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
 
-    async def plot(self, instruction_prompt, model_name='qwen2.5-coder:14b'):
+    async def plot(self, instruction_prompt, model_name=DEFAULT_LLM_MODEL):
         if self.df is not None:
             t0=time.time()
             self.current_model=model_name
@@ -313,7 +470,7 @@ User instructions for plotting: {instruction_prompt}
                 logger.error(e)
                 self._chat_history.add_ai_message(str(e), metadata={'content': e, 'type': 'error', 'code': code, 'duration': duration})
 
-    async def prepare_save(self, model_name='qwen2.5-coder:14b'):
+    async def prepare_save(self, model_name=DEFAULT_LLM_MODEL):
         # Function to generate a the real question based on the chat history the SQL response
         h=[]
         for r in self.chat_history.filter(['plot']):
@@ -325,16 +482,33 @@ User instructions for plotting: {instruction_prompt}
         Pay attention to user changes to SQL code and match it to the question.
         Just provide the question without any extra explanation.
         """
-#logger.info(f"Generating THE question with: {prompt}")
+        # logger.info(f"Generating THE question with: {prompt}")
         # Ensure llm agent exists even if save flow starts before any chat() call.
         self.current_model=model_name
-        collected=""
-        async for chunk in self._llm_agent.astream(prompt):
-            if c:=chunk.content:
-                collected += c
-                yield c
-        logger.info(f"Generated question: {collected}")
-        self._question=collected#.split('```', 2)[1].strip()
+
+        def _fallback_question():
+            messages = list(getattr(self._chat_history, 'messages', []) or [])
+            for msg in reversed(messages):
+                if getattr(msg, 'type', None) == 'user':
+                    content = (getattr(msg, 'content', None) or '').strip()
+                    if content:
+                        return content
+            return f"What question is answered by this SQL query? {self.sql}".strip()
+
+        timeout_seconds = int(_ge('SAVE_PREPARE_TIMEOUT_SECONDS', 45))
+        try:
+            resp = await asyncio.wait_for(self._llm_agent.ainvoke(prompt), timeout=timeout_seconds)
+            collected = (getattr(resp, 'content', '') or '').strip()
+            if not collected:
+                collected = _fallback_question()
+            self._question = collected
+            logger.info(f"Generated question: {collected}")
+            yield collected
+        except Exception as e:
+            logger.warning(f"prepare_save failed, using fallback question: {e}")
+            collected = _fallback_question()
+            self._question = collected
+            yield collected
 
 
     def execute(self, sql):

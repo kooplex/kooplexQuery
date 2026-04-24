@@ -2,7 +2,8 @@
 
 from pathlib import Path
 import sys
-sys.path.append(str(Path(__file__).parent.parent))
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 from streamlit_extras.chart_container import *
 import streamlit.components.v1 as components
@@ -12,8 +13,10 @@ from st_keyup import st_keyup
 
 import logging
 import time
-from kooplexQuery.motor import Motor, supported_models
-from .utils import *
+from kooplexQuery.motor import LLM_Model, Motor, add_llm_model, delete_llm_model, list_llm_models
+from kooplexQuery.utils.misc import *
+from kooplexQuery.utils.sync_manager import *
+from kooplexQuery.utils.plot_utils import *
 import asyncio
 import uuid
 import sys
@@ -80,6 +83,7 @@ def prompt():
             "OPENAI_API_KEY": {"value": "OpenAI API key", "type": "password"},
             "OLLAMA_HOST": {"value": "Ollama host", "type": "default"},
             "OLLAMA_PORT": {"value": "Ollama port", "type": "default"},
+            "OLLAMA_MODEL": {"value": "Ollama model", "type": "default"},
             "ANTHROPIC_API_KEY": {"value": "Anthropic API key", "type": "password"},
         }
         #if config.env file exists, load existing values as defaults
@@ -347,9 +351,20 @@ def prompt():
         logger.info(f"Creating new session")
         _newsession()
 
-    # Handle model selection change
-    def on_model_selection_change():
-        st.session_state.current_model=st.session_state.selected_model.name
+    def format_model_option(model: LLM_Model) -> str:
+        return f"{model.model_name} - {model.provider}"
+
+    def model_ref(model: LLM_Model) -> tuple[str, str]:
+        return (model.provider, model.model_name)
+
+    def selected_model_index(models: list[LLM_Model]) -> int:
+        selected_ref = st.session_state.get('selected_model_ref')
+        if selected_ref is not None:
+            for i, model in enumerate(models):
+                if model_ref(model) == selected_ref:
+                    return i
+        st.session_state['selected_model_ref'] = model_ref(models[0])
+        return 0
 
 
 # From managedb
@@ -478,10 +493,10 @@ def prompt():
         if st.session_state.interface == 'managedb':
             st.title("KooplexQuery Database Management")
             st.subheader(st.session_state['database_server'].get('title', "Database"))
+            if st.button("Documentation"):
+                st.session_state['current_tab'] = "Documentation"
             if st.button("Table and Column Descriptions"):
                 st.session_state['current_tab'] = "TableColumn"
-            if st.button("Data Descriptors"):
-                st.session_state['current_tab'] = "Metadata"
             if st.button("Examples"):
                 st.session_state['current_tab'] = "Examples"
             if st.button("Search in the whole VectorStore"):
@@ -494,14 +509,41 @@ def prompt():
             if st.button("New Session", width='stretch', disabled=st.session_state.motor.is_new_session):
                 _newsession()
             st.toggle("Autocorrect", value=False, key="autocorrect", on_change=None, args=None, kwargs=None)
-            selected_model=st.sidebar.selectbox(
+            available_models = list_llm_models()
+            model_index = selected_model_index(available_models)
+            selected_model = st.sidebar.selectbox(
                 "Select model for Text2SQL",
-                supported_models,
-                key="selected_model",
-                format_func=lambda x:f"{x.name} - {x.type}",
-                on_change=on_model_selection_change,
+                available_models,
+                index=model_index,
+                format_func=format_model_option,
             )
-            st.session_state.current_model=selected_model.name
+            st.session_state.selected_model_ref = model_ref(selected_model)
+            st.session_state.selected_model = selected_model
+            st.session_state.current_model = selected_model.model_name
+
+            with st.form("add_llm_model_form"):
+                new_model_name = st.text_input("New LLM model", key="new_llm_model_name")
+                new_model_provider = st.text_input("New LLM model provider", key="new_llm_model_provider")
+                add_model_requested = st.form_submit_button("Add model")
+            if add_model_requested:
+                try:
+                    added_model = add_llm_model(new_model_name, new_model_provider)
+                except ValueError as exc:
+                    st.warning(str(exc))
+                else:
+                    st.session_state.selected_model_ref = model_ref(added_model)
+                    st.session_state.current_model = added_model.model_name
+                    st.rerun()
+
+            if st.button("Delete selected model", width='stretch'):
+                deleted = delete_llm_model(selected_model.model_name, selected_model.provider)
+                if deleted:
+                    st.session_state.selected_model_ref = None
+                    st.success(f"Deleted model: {selected_model.model_name} ({selected_model.provider})")
+                    st.rerun()
+                else:
+                    st.warning("Selected model was not found in the model registry.")
+
             if st.button("Save Accurate Query", width='stretch', disabled=not st.session_state.motor.can_prepare_save):
                 st.session_state.save_req=True
                 st.rerun()
@@ -648,7 +690,7 @@ def prompt():
             with control_container.container():
                 st.markdown("💡 Note: _An expert will validate this relation later._")
                 with st.spinner("Digesting conversation..."):
-                    st.write_stream(st.session_state.motor.prepare_save())
+                    st.write_stream(st.session_state.motor.prepare_save(st.session_state.selected_model))
                     col1, col2 = st.columns([1, 1])
                     with col1:
                         if st.button("💾 Save", disabled=not st.session_state.motor.can_save):
@@ -681,7 +723,7 @@ def prompt():
             with control_container.container():
                 with st.spinner("⏳ Thinking...."):
                     with st.chat_message("assistant"):
-                        st.write_stream(st.session_state.motor.correct_error(st.session_state.sql_fix[1]))
+                        st.write_stream(st.session_state.motor.correct_error(st.session_state.sql_fix[1], st.session_state.selected_model))
                 st.session_state.sql_fix=None
                 st.rerun()
 
@@ -689,7 +731,7 @@ def prompt():
         if st.session_state.plot_instruction:
             with st.spinner("✅ Generating plot"):
                 with st.chat_message("assistant"):
-                    st.write_stream(st.session_state.motor.plot(st.session_state.plot_instruction, st.session_state.selected_model.name))
+                    st.write_stream(st.session_state.motor.plot(st.session_state.plot_instruction, st.session_state.selected_model))
                     st.session_state.plot_instruction=None
                     st.rerun()
 
@@ -715,7 +757,7 @@ def prompt():
 
             with st.spinner("⏳ Thinking..."):
                 with st.chat_message("assistant"):
-                    st.write_stream(st.session_state.motor.chat(st.session_state.latest_user_input, st.session_state.selected_model.name))
+                    st.write_stream(st.session_state.motor.chat(st.session_state.latest_user_input, st.session_state.selected_model))
 
             # Reset state and allow new input
             st.session_state.awaiting_response = False
@@ -724,43 +766,108 @@ def prompt():
 
     # Manage db button logics
     if st.session_state.interface == 'managedb':
-        if st.session_state['current_tab'] == "Schema":
+        if st.session_state['current_tab'] == "Documentation":
             with disp.container():
-                col1, col2 = st.columns(2)
-                with col1:
-                    schema_file = st.file_uploader(label="Upload schema file (ddl)", key="schema_file")
-                    if schema_file is not None:
-                        upload_schema_to_chat_db(schema_file)
-                        st.success("Database schema uploaded successfully!")
-                        del schema_file
-                    st.subheader("Original Database Schema")
-                    st.text(st.session_state.get('meta_schema'))
-                with col2:
-                    if st.button("Sync Schema"):
-                        # Use Motor's sync manager for automatic vectorstore synchronization
-                        st.session_state['motor'].save_knowledge('schema', st.session_state.get('meta_schema'))
-                        st.success("Schema synced to database and vectorstore! ")
-                    st.subheader("Synced Schema")
-                    if st.session_state.get('vecstore') is not None:
-                        schema = st.session_state['vecstore']._init_db(collection_name='schema')
-                    # Search in the vectorstore for the schema content to verify it was added correctly
-                    # Search as I type to see the results update in real time
+                try:
+                    keys, knowledge_rows = st.session_state['motor'].db_chat.fetch_all_knowledge()
+                    knowledge_df = pd.DataFrame(knowledge_rows, columns=keys)
+                except Exception as e:
+                    logger.error(f"Error fetching knowledge rows: {e}")
+                    st.error("Could not load rows from the knowledge table.")
+                    knowledge_df = pd.DataFrame(columns=["id", "reference", "content"])
+
+                st.subheader("Knowledge Table")
+
+                if knowledge_df.empty:
+                    st.info("No rows found in the knowledge table.")
+                else:
+                    st.write(f"{len(knowledge_df)} knowledge rows found.")
                     
-                    # query = st_keyup("Search in schema collection")
-                    # result_area = search_schema(query)
-                        st.write(f"Number of documents in schema collection: {len(schema.get()['ids'])}")
-                        query = st_keyup("Search in Database Schema", debounce=200)
-                        if query:
-                            search_collection(query, 'schema')
-                                    
+                    if st.button("🔄 Sync Knowledge to VectorStore"):
+                        try:
+                            for _, row in knowledge_df.iterrows():
+                                st.session_state['vecstore'].add_to_docs(
+                                    metadatas=[{"Reference": row['reference'], 'type': 'knowledge', 'id': row['id']}],
+                                    texts=[row['content']]
+                                )
+                            st.success(f"Synced {len(knowledge_df)} knowledge entries to vectorstore!")
+                        except Exception as e:
+                            logger.error(f"Error syncing knowledge to vectorstore: {e}")
+                            st.error(f"Failed to sync knowledge: {e}")
+                    selected_index = st.selectbox(
+                        "Select a knowledge row",
+                        options=knowledge_df.index.tolist(),
+                        format_func=lambda idx: f"{knowledge_df.loc[idx, 'reference']} (id={knowledge_df.loc[idx, 'id']})",
+                    )
+                    selected_row = knowledge_df.loc[selected_index]
+
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.dataframe(
+                            knowledge_df[["id", "reference"]],
+                            width='stretch',
+                            hide_index=True,
+                        )
+                    with col2:
+                        st.markdown(f"**ID:** {selected_row['id']}")
+                        st.markdown(f"**Reference:** {selected_row['reference']}")
+                        st.markdown("**Content:**")
+                        edited_content = st.text_area(
+                            "Knowledge content",
+                            value=selected_row['content'] or "",
+                            height=400,
+                            disabled=False,
+                            label_visibility="collapsed",
+                            key=f"content_edit_{selected_index}",
+                        )
+                        col_update, col_delete = st.columns(2)
+                        with col_update:
+                            if st.button("💾 Update Row", key=f"update_{selected_index}"):
+                                try:
+                                    st.session_state['motor'].db_chat.save_knowledge(
+                                        reference=selected_row['reference'],
+                                        content=edited_content
+                                    )
+                                    st.success(f"Updated knowledge row: {selected_row['reference']}")
+                                    st.rerun()
+                                except Exception as e:
+                                    logger.error(f"Error updating knowledge row: {e}")
+                                    st.error(f"Failed to update row: {e}")
+                        with col_delete:
+                            if st.button("🗑️ Delete Row", key=f"delete_{selected_index}"):
+                                try:
+                                    st.session_state['motor'].db_chat.engine.execute(
+                                        text(f"DELETE FROM {st.session_state['motor'].db_chat.schema}.knowledge WHERE id = :id"),
+                                        {'id': selected_row['id']}
+                                    )
+                                    st.session_state['motor'].db_chat.engine.commit()
+                                    st.success(f"Deleted knowledge row: {selected_row['reference']}")
+                                    st.rerun()
+                                except Exception as e:
+                                    logger.error(f"Error deleting knowledge row: {e}")
+                                    st.error(f"Failed to delete row: {e}")
+
+                st.markdown("---")
+                st.subheader("Add New Knowledge Entry")
+                with st.form("add_knowledge_form"):
+                    new_reference = st.text_input("Reference", placeholder="e.g., schema, instruction, data_descriptor")
+                    new_content = st.text_area("Content", height=300, placeholder="Enter the knowledge content here")
+                    submitted = st.form_submit_button("✨ Add New Row")
+                    
+                    if submitted:
+                        if not new_reference or not new_content:
+                            st.error("Both Reference and Content are required")
                         else:
-                            with st.expander("Full schema collection content", expanded=False):
-                                first_rows = schema.get()['documents'][:5]
-                                st.text("First 5 rows of schema collection:")
-                                for row in first_rows:
-                                    st.text(row)
-                    else:
-                        st.warning("Vector store is not available. Please check configuration and restart the app.")
+                            try:
+                                st.session_state['motor'].db_chat.save_knowledge(
+                                    reference=new_reference,
+                                    content=new_content
+                                )
+                                st.success(f"Added new knowledge entry: {new_reference}")
+                                st.rerun()
+                            except Exception as e:
+                                logger.error(f"Error adding knowledge row: {e}")
+                                st.error(f"Failed to add row: {e}")
         elif st.session_state['current_tab'] == "TableColumn":
             with disp.container():
                 if st.session_state.get('vecstore') is None:
@@ -802,48 +909,7 @@ def prompt():
                         for row in first_rows:
                             st.text(row)
 
-        elif st.session_state['current_tab'] == "Metadata":
-            with disp.container():
-                st.write(f"**Statistics**: {st.session_state.get('statistics')}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    # Add new instructions
-                    st.header("Instruction")
-                    st.markdown(st.session_state.get('instruction'))
-                    st.text_area("Set prompt  for LLM", value="", key="instructions_input")
-                    if st.button("Update Instruction"):
-                        # Use Motor.save_knowledge for automatic vectorstore sync
-                        st.session_state['motor'].save_knowledge(reference="instruction",
-                                                                        content=st.session_state.instructions_input)
-                        st.success("Instruction updated in chat database and synced to vectorstore!")
-                        st.session_state['instruction'] = st.session_state['motor'].db_chat.load_knowledge(reference="instruction")
-                    
-                    
-
-                    # Add new data descriptor
-                    st.header("Data Descriptor")
-                    st.text(st.session_state.get('data_descriptor'))
-                    st.text_area("Explain the data", value="", key="data_descriptor_input")
-                    if st.button("Update Data Descriptor"):
-                        # Use Motor.save_knowledge for automatic vectorstore sync
-                        st.session_state['motor'].save_knowledge(reference="data_descriptor",
-                                                                        content=st.session_state.data_descriptor_input)
-                        st.success("Data descriptor updated in chat database and synced to vectorstore!")
-                        st.session_state['data_descriptor'] = st.session_state['motor'].db_chat.load_knowledge(reference="data_descriptor")
-                    
-                with col2:
-                    # Add new data reference
-                    st.header("Database Reference")
-                    st.markdown(st.session_state.get('database_reference'))
-                    st.text_area("Describe the database", value="", key="database_reference_input")
-                    if st.button("Update Data Reference"):
-                        # Use Motor.save_knowledge for automatic vectorstore sync
-                        st.session_state['motor'].save_knowledge(reference="data_reference",
-                                                                        content=st.session_state.database_reference_input)
-                        st.success("Data reference updated in chat database and synced to vectorstore!")
-                        st.session_state['database_reference'] = st.session_state['motor'].db_chat.load_knowledge(reference="data_reference")
-                    
-            
+       
         elif st.session_state['current_tab'] == "Examples":
             with disp.container():
                 examples = st.session_state.get('examples')
@@ -875,6 +941,7 @@ def prompt():
                     st.dataframe(examples)
         elif st.session_state['current_tab'] == "Search in the whole VectorStore":
             with disp.container():
+                st.markdown(st.session_state['statistics'])
                 if st.session_state.get('vecstore') is None:
                     st.warning("Vector store is not available. Please check configuration and restart the app.")
                 else:
