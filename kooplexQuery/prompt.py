@@ -978,6 +978,12 @@ def main():
     if not load_dotenv():
         load_dotenv("config.env")
 
+    # Check environment variables for base path and port, with defaults
+    # And give a warning if the variable is not set
+    if "REPORT_URL" not in os.environ:
+        logger.warning("Environment variable REPORT_URL not set. Using default base path 'kooplex-query'. Set REPORT_URL to change this.")
+    if "REPORT_PORT" not in os.environ:
+        logger.warning("Environment variable REPORT_PORT not set. Using default port 9000. Set REPORT_PORT to change this.")
     base_path = _ge("REPORT_URL", "kooplex-query")
     base_path = base_path.strip("/")
     port = _ge("REPORT_PORT", "9000")

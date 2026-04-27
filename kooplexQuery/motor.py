@@ -32,8 +32,13 @@ class Content_Chunk:
     type: str
     content: str
 
-
-DEFAULT_LLM_MODEL = LLM_Model(provider='openai', model_name='gpt-4.1-mini')
+if not os.getenv('DEFAULT_LLM_MODEL') and not os.getenv('DEFAULT_LLM_PROVIDER'):
+    logger.warning("No default LLM model or provider set in environment variables. Using fallback default: gpt-4.1-mini from openai. Set DEFAULT_LLM_MODEL and DEFAULT_LLM_PROVIDER to change this.")
+DEFAULT_LLM = LLM_Model(
+    provider=os.getenv('DEFAULT_LLM_PROVIDER', 'openai'),
+    model_name=os.getenv('DEFAULT_LLM_MODEL', 'gpt-4.1-mini')
+)
+logger.info("Default LLM set to: %s provider: %s", DEFAULT_LLM.model_name, DEFAULT_LLM.provider)
 
 
 def _llm_models_db_path() -> Path:
@@ -79,7 +84,7 @@ def _ensure_llm_models_db() -> Path:
         )
         con.execute(
             "INSERT OR IGNORE INTO llm_models (model_name, provider) VALUES (?, ?)",
-            (DEFAULT_LLM_MODEL.model_name, DEFAULT_LLM_MODEL.provider),
+            (DEFAULT_LLM.model_name, DEFAULT_LLM.provider),
         )
         con.commit()
     return db_path
@@ -154,7 +159,7 @@ def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
     if model_name_attr:
         normalized_model_name = str(model_name_attr).strip()
         if not normalized_model_name:
-            return DEFAULT_LLM_MODEL
+            return DEFAULT_LLM
         normalized_provider = (
             str(provider_attr).strip() if provider_attr else default_provider_for_model(normalized_model_name)
         )
@@ -163,11 +168,11 @@ def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
         return LLM_Model(provider=normalized_provider, model_name=normalized_model_name)
 
     if not model:
-        return DEFAULT_LLM_MODEL
+        return DEFAULT_LLM
 
     normalized_model_name = str(model).strip()
     if not normalized_model_name:
-        return DEFAULT_LLM_MODEL
+        return DEFAULT_LLM
 
     db_path = _ensure_llm_models_db()
     with sqlite3.connect(db_path) as con:
@@ -380,7 +385,7 @@ class Motor(object):
             self.sql=sql
 
 
-    async def chat(self, prompt, model_name=DEFAULT_LLM_MODEL):
+    async def chat(self, prompt, model_name=DEFAULT_LLM):
         t0=time.time()
         self.current_model=model_name
         self._chat_history.add_user_message(prompt, metadata={'timestamp': t0, 'model': self.current_model })
@@ -392,7 +397,7 @@ class Motor(object):
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
         self.db_chat.save_chat_item(self.session_id, prompt, collected, self.current_model)
 
-    async def correct_error(self, error, model_name=DEFAULT_LLM_MODEL):
+    async def correct_error(self, error, model_name=DEFAULT_LLM):
         detail=getattr(error, 'orig', None)
         statement=getattr(error, 'statement', None)
         prompt = f"Correct the SQL query\n{statement}\nbecause: {detail}"
@@ -407,7 +412,7 @@ class Motor(object):
                 yield c
         self._chat_history.add_ai_message(collected, metadata={'type': 'generated', 'duration': time.time()-t0, 'parsed': self._parse_sql(collected) })
 
-    async def plot(self, instruction_prompt, model_name=DEFAULT_LLM_MODEL):
+    async def plot(self, instruction_prompt, model_name=DEFAULT_LLM):
         if self.df is not None:
             t0=time.time()
             self.current_model=model_name
@@ -470,7 +475,7 @@ User instructions for plotting: {instruction_prompt}
                 logger.error(e)
                 self._chat_history.add_ai_message(str(e), metadata={'content': e, 'type': 'error', 'code': code, 'duration': duration})
 
-    async def prepare_save(self, model_name=DEFAULT_LLM_MODEL):
+    async def prepare_save(self, model_name=DEFAULT_LLM):
         # Function to generate a the real question based on the chat history the SQL response
         h=[]
         for r in self.chat_history.filter(['plot']):
