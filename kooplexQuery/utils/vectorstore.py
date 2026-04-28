@@ -93,12 +93,8 @@ class VectorStore():
                     gpt4all_kwargs=gpt4all_kwargs
                 )
 
-            # # Init collection if not already
-            try:
-                c = self.chroma_client.create_collection(collection_name)
-            except:
-                logger.info(f"Collection {collection_name} already exists in DB")
-                pass
+            # Ensure the backing collection exists before creating the LangChain wrapper.
+            self.chroma_client.get_or_create_collection(collection_name)
 
             # if not self.examples:
             #     c = self.chroma_client.get_or_create_collection(collection_name)
@@ -114,20 +110,28 @@ class VectorStore():
                 return Chroma(client=self.chroma_client, embedding_function=self.embeddings, collection_name=collection_name)
             # return self.chroma_client.get_or_create_collection( embedding_function=self.embeddings, name=collection_name)
             # return self.chroma_client.get_or_create_collection(name=collection_name)
+
+    def _cache_collection(self, collection_name, collection):
+        """Update the cached LangChain wrapper for a named collection."""
+        if collection_name == self.CollectionNames["EXAMPLES"]:
+            self.examples = collection
+        elif collection_name == self.CollectionNames["DOCS"]:
+            self.docs = collection
+        elif collection_name == self.CollectionNames["ADVICES"]:
+            self.advices = collection
+        elif collection_name == self.CollectionNames["SCHEMA"]:
+            self.schema = collection
     
     def _select_collection_by_name(self, collection_name):
         """ Select collection by name.  """
-        if collection_name == self.CollectionNames["EXAMPLES"]:
-            return self.examples
-        elif collection_name == self.CollectionNames["DOCS"]:
-            return self.docs
-        elif collection_name == self.CollectionNames["ADVICES"]:
-            return self.advices
-        elif collection_name == self.CollectionNames["SCHEMA"]:
-            return self.schema  
-        else:
+        if collection_name not in self.get_collections():
             logger.error(f"Collection {collection_name} not found! Available collections: {self.get_collections()}")
             return None
+
+        # Always refresh the wrapper so it points at the current collection UUID.
+        collection = self._init_db(collection_name)
+        self._cache_collection(collection_name, collection)
+        return collection
 
     def _check_similarity(self, text, collection):
         """ Check if item exists in collection.  """
