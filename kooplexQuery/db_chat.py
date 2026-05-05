@@ -2,6 +2,11 @@ from sqlalchemy import create_engine, text
 
 class DBChat(object):
     @staticmethod
+    def _quote_ident(identifier):
+        """Safely quote a PostgreSQL identifier (schema/table/role names)."""
+        return '"' + str(identifier).replace('"', '""') + '"'
+
+    @staticmethod
     def create_database_if_missing(hostname, port, database):
         from dotenv import load_dotenv
         import os
@@ -41,6 +46,7 @@ class DBChat(object):
 
     def __init__(self, hostname, port, database, schema, user, password, generated_callback=lambda c: None):
         connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
+        schema_search_path = self._quote_ident(schema)
         
         self.cb_generated = generated_callback
         self.schema = schema
@@ -53,11 +59,11 @@ class DBChat(object):
         if not self._check_schema():
             print(f"Schema {schema} does not exist. Creating schema and tables...")
             self.create_schema()
-            self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+            self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema_search_path}"})
         else:
             print(f"Schema {schema} exists. Ready to use.")
 
-        self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+        self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema_search_path}"})
         
 
     def _check_schema(self):
@@ -254,10 +260,11 @@ on q.id=a.question_id;
     
     def delete_row(self, question_id):
         question_id = int(question_id)
+        schema_name = self._quote_ident(self.schema)
         with self.engine.begin() as con:
             # Step 1: Delete from child table first (chat.query)
             ddl = f"""
-DELETE FROM {self.schema}.query
+DELETE FROM {schema_name}.query
 WHERE question_id = :question_id
             """
             con.execute(text(ddl), {
@@ -266,7 +273,7 @@ WHERE question_id = :question_id
         
             # Step 2: Delete from parent table (chat.question)
             ddl = f"""
-DELETE FROM {self.schema}.question
+DELETE FROM {schema_name}.question
 WHERE id = :question_id  """
             con.execute(text(ddl), {
                 'question_id': question_id
@@ -280,9 +287,10 @@ WHERE id = :question_id  """
         A next validation eill further increase it's score
         """
         question_id = int(question_id)
+        schema_name = self._quote_ident(self.schema)
         with self.engine.begin() as con:
             ddl = f"""
-UPDATE {self.schema}.query
+UPDATE {schema_name}.query
 SET 
     score = :score
 WHERE question_id = :question_id
@@ -292,7 +300,7 @@ WHERE question_id = :question_id
                     'question_id': question_id
                 })
             ddl = f"""
-UPDATE {self.schema}.question
+UPDATE {schema_name}.question
 SET type = :type,
     public = :public
 WHERE id = :question_id
