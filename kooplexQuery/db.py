@@ -3,6 +3,25 @@ import requests
 from pandas import pandas
 from io import StringIO
 
+
+class BufferedResult(object):
+    """Small compatibility wrapper for buffered DB rows."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def all(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
 class DBQuery(object):
     def __init__(self, hostname, port, database, schema, user, password, url=None, type="postgres", title=None, *args, **kwargs):
         self.url = None
@@ -25,8 +44,9 @@ class DBQuery(object):
                 if self.engine.dialect.name == 'postgresql':
                     return con.execute(text(sql), subst)
                 elif self.engine.dialect.name == 'mssql':
-                    cursor = con.exec_driver_sql(sql)
-                    return cursor
+                    # Buffer results while the connection is still open.
+                    cursor = con.execute(text(sql), subst)
+                    return BufferedResult(cursor.fetchall())
 
     def query_to_df(self, sql, subst={}):
         if self.url:
@@ -66,22 +86,22 @@ ORDER BY c.relname;
             r=self.query(q, {'schema': self.schema})
         return r.fetchall()
 
-    def describe_tables_mssql(self, table_name_like = None):
-        # MSSQL: list user tables and views in a schema, including optional description
-        # Uses extended properties for table comments (MS_Description)
-    
-        q="""
+    def describe_tables_mssql(self, table_name_like=None):
+        # MSSQL: list user tables and views in a schema, including optional description.
+        # Uses extended properties for table comments (MS_Description).
+        q = """
 SELECT o.name AS table_name,
-       ep.value AS table_comment
+             CAST(ep.value AS NVARCHAR(MAX)) AS table_comment
 FROM sys.objects o
 LEFT JOIN sys.extended_properties ep
-  ON ep.major_id = o.object_id
-  AND ep.minor_id = 0
-  AND ep.name = 'MS_Description'
+    ON ep.major_id = o.object_id
+ AND ep.minor_id = 0
+ AND ep.name = 'MS_Description'
 WHERE o.type IN ('U', 'V')
+    AND (:table_name_like IS NULL OR o.name LIKE :table_name_like)
 ORDER BY o.name;
-            """
-        r=self.query(q)
+        """
+        r = self.query(q, {'table_name_like': table_name_like})
         return r.fetchall()
 
     def describe_columns(self, table_name_like = None):
@@ -117,13 +137,21 @@ ORDER BY c.relname, a.attnum;
 
     def describe_columns_mssql(self, table_name_like = None):
         q="""
-SELECT *
+SELECT o.name AS table_name,
+       c.name AS column_name,
+       CAST(ep.value AS NVARCHAR(MAX)) AS description,
+       TYPE_NAME(c.user_type_id) AS datatype
 FROM sys.objects o
 JOIN sys.columns c ON c.object_id = o.object_id
+LEFT JOIN sys.extended_properties ep
+  ON ep.major_id = c.object_id
+  AND ep.minor_id = c.column_id
+  AND ep.name = 'MS_Description'
 WHERE o.type IN ('U', 'V')
+  AND (:table_name_like IS NULL OR o.name LIKE :table_name_like)
 ORDER BY o.name, c.column_id;
             """
-        r=self.query(q)
+        r=self.query(q, {'table_name_like': table_name_like})
         return r.fetchall()
 
     @staticmethod

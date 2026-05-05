@@ -9,7 +9,6 @@ from streamlit_extras.chart_container import *
 import streamlit.components.v1 as components
 from streamlit_elements import html
 import streamlit.web.cli as stcli
-from st_keyup import st_keyup
 
 import logging
 import time
@@ -639,10 +638,11 @@ def prompt():
         elif st.session_state.interface == 'validator':
             def show_examples():
                 with example_container.container():
-                    st.write("### Examples")
+                    # st.write("### Examples (select one to validate)")
                     if st.session_state.motor.is_new_session:
                             keys, data = st.session_state.motor.db_chat.fetch_all_examples()
-                            st.write(f"Select an example from the database to start validating. {len(data)} examples available.")
+                            st.header(f"Select an example from the database to validate.")
+                            st.write(f"{len(data)} examples available.")
                             st.session_state.df = pd.DataFrame(columns=keys, data=data)
                             #st.session_state.df = df[['question_id', 'question_content', 'sql', 'type', 'public', 'score']]
                             st.session_state.df.sort_values(by=['public','score', 'question_content' ], ascending=True, inplace=True)
@@ -781,19 +781,19 @@ def prompt():
                 if knowledge_df.empty:
                     st.info("No rows found in the knowledge table.")
                 else:
-                    st.write(f"{len(knowledge_df)} knowledge rows found.")
+                    # st.write(f"{len(knowledge_df)} knowledge rows found.")
                     
-                    if st.button("🔄 Sync Knowledge to VectorStore"):
-                        try:
-                            for _, row in knowledge_df.iterrows():
-                                st.session_state['vecstore'].add_to_docs(
-                                    metadatas=[{"Reference": row['reference'], 'type': 'knowledge', 'id': row['id']}],
-                                    texts=[row['content']]
-                                )
-                            st.success(f"Synced {len(knowledge_df)} knowledge entries to vectorstore!")
-                        except Exception as e:
-                            logger.error(f"Error syncing knowledge to vectorstore: {e}")
-                            st.error(f"Failed to sync knowledge: {e}")
+                    # if st.button("🔄 Sync Knowledge to VectorStore"):
+                    #     try:
+                    #         for _, row in knowledge_df.iterrows():
+                    #             st.session_state['vecstore'].add_to_docs(
+                    #                 metadatas=[{"Reference": row['reference'], 'type': 'knowledge', 'id': row['id']}],
+                    #                 texts=[row['content']]
+                    #             )
+                    #         st.success(f"Synced {len(knowledge_df)} knowledge entries to vectorstore!")
+                    #     except Exception as e:
+                    #         logger.error(f"Error syncing knowledge to vectorstore: {e}")
+                    #         st.error(f"Failed to sync knowledge: {e}")
                     selected_index = st.selectbox(
                         "Select a knowledge row",
                         options=knowledge_df.index.tolist(),
@@ -870,39 +870,54 @@ def prompt():
                                 st.error(f"Failed to add row: {e}")
         elif st.session_state['current_tab'] == "TableColumn":
             with disp.container():
-                if st.session_state.get('vecstore') is None:
-                    st.warning("Vector store is not available. Please check configuration and restart the app.")
-                else:
-                    if st.button("Sync Table and Column Descriptions to VectorStore"):
-                        for row in st.session_state.get('table_descriptions', ()):
-                            # st.session_state['vecstore'].load_split_add_text([f"Table {row[0]}:,  {row[1]}"], collection_name="docs")
-                            st.session_state['vecstore'].add_to_docs(metadatas=[{"Table": row[0], 'type': 'table_description'}], texts=[f"{row[1]}"])
-                        for row in st.session_state.get('column_descriptions', ()):
-                            st.session_state['vecstore'].add_to_docs(metadatas=[{"Column": row[0], 'type': 'column_description'}], texts=[f" - ".join(row[1:])])
-                        st.success("Table and column descriptions synced to vectorstore!")
+                st.header("Table and Column Descriptions")
+                st.write("Descriptions of tables and columns extracted from the connected database. You can use this information to understand the database structure and also as a source to sync with the vectorstore for better question understanding by the LLM.")
 
-                    docs = st.session_state['vecstore']._init_db(collection_name='docs')
-                    st.write(f"Number of documents in docs collection: {len(docs.get()['ids'])}")
-                    query = st_keyup("Search in Table and Column Descriptions", debounce=200)
-                    if query:
-                        search_collection(query, 'docs')
+                # if st.session_state.get('vecstore') is None:
+                #     st.warning("Vector store is not available. Please check configuration and restart the app.")
+                # else:
+                    # if st.button("Sync Table and Column Descriptions to VectorStore"):
+                    #     for row in st.session_state.get('table_descriptions', ()):
+                    #         # st.session_state['vecstore'].load_split_add_text([f"Table {row[0]}:,  {row[1]}"], collection_name="docs")
+                    #         table_name = str(row[0]) if len(row) > 0 else ""
+                    #         table_desc = table_name if len(row) < 2 or row[1] is None else str(row[1])
+                    #         st.session_state['vecstore'].add_to_docs(
+                    #             metadatas=[{"Table": table_name, 'type': 'table_description'}],
+                    #             texts=[table_desc]
+                    #         )
+                        # for row in st.session_state.get('column_descriptions', ()):
+                        #     column_name = str(row[1]) if len(row) > 1 else (str(row[0]) if row else "")
+                        #     text_parts = [str(value) for value in row if value is not None]
+                        #     st.session_state['vecstore'].add_to_docs(
+                        #         metadatas=[{"Column": column_name, 'type': 'column_description'}],
+                        #         texts=[" - ".join(text_parts)]
+                        #     )
+                        # st.success("Table and column descriptions synced to vectorstore!")
+
+                    # docs = st.session_state['vecstore']._init_db(collection_name='docs')
+                    # # st.write(f"Number of documents in docs collection: {len(docs.get()['ids'])}")
+                    # with st.form("table_column_search_form"):
+                    #     query = st.text_input("Search in Table and Column Descriptions", key="table_column_search_query")
+                    #     search_docs = st.form_submit_button("Search")
+                    # if search_docs and query:
+                    #     search_collection(query, 'docs')
                                 
-                    else:
-                        with st.expander("Full docs collection content", expanded=False):
-                            first_rows = docs.get()['documents'][:5]
-                            st.text("First 5 rows of docs collection:")
-                            for row in first_rows:
-                                st.text(row)
+                    # else:
+                    #     with st.expander("Full docs collection content", expanded=False):
+                    #         first_rows = docs.get()['documents'][:5]
+                    #         st.text("First 5 rows of docs collection:")
+                    #         for row in first_rows:
+                    #             st.text(row)
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.header("Table Descriptions")
+                    st.subheader("Tables")
                     with st.expander("Full Table Descriptions", expanded=False):
                         first_rows = st.session_state.get('table_descriptions')[:5]
                         st.text("First 5 rows of table descriptions:")
                         for row in first_rows:
                             st.text(row)
                 with col2:
-                    st.header("Column Descriptions")
+                    st.subheader("Columns")
                     with st.expander("Full Column Descriptions", expanded=False):
                         first_rows = st.session_state.get('column_descriptions')[:5]
                         st.text("First 5 rows of column descriptions:")
@@ -912,17 +927,20 @@ def prompt():
        
         elif st.session_state['current_tab'] == "Examples":
             with disp.container():
+                st.header("Examples")
+                st.write("Examples of questions and corresponding SQL queries stored in the database. You can add new examples to the database which can then be used to guide the LLM in understanding how to answer questions based on the connected database. You can also sync the examples with the vectorstore to make them available for retrieval when relevant to the user's question.")
+                st.markdown("*Use the **Validator** menu to validate the examples and make them public!*")
                 examples = st.session_state.get('examples')
                 if st.session_state.get('vecstore') is None:
                     st.warning("Vector store is not available. Please check configuration and restart the app.")
                 else:
-                    if st.button("Sync Examples to VectorStore"):
-                        # Use sync manager for batch sync of all public examples
-                        synced_count = st.session_state['motor'].sync_manager.batch_sync_examples()
-                        st.success(f"All {synced_count} public/validated examples were synced to the vectorstore!")
+                    # if st.button("Sync Examples to VectorStore"):
+                    #     # Use sync manager for batch sync of all public examples
+                    #     synced_count = st.session_state['motor'].sync_manager.batch_sync_examples()
+                    #     st.success(f"All {synced_count} public/validated examples were synced to the vectorstore!")
                         
-                    vs_examples = st.session_state['vecstore']._init_db(collection_name="examples")
-                    st.write(f" {len(vs_examples.get()['ids'])} examples are in the vectorstore...")
+                    # vs_examples = st.session_state['vecstore']._init_db(collection_name="examples")
+                    # st.write(f" {len(vs_examples.get()['ids'])} examples are in the vectorstore...")
                     # Add new example
                     # question_content = st.text_input("Question")
                     # sql_query = st.text_input("SQL Query")
@@ -941,14 +959,18 @@ def prompt():
                     st.dataframe(examples)
         elif st.session_state['current_tab'] == "Search in the whole VectorStore":
             with disp.container():
-                st.markdown(st.session_state['statistics'])
+                st.header("Search in the whole VectorStore")
+                st.write("To aid the AI assistant in understanding your database and providing accurate answers, the metadata is stored in a vectorstore")
+                st.write("You can search through the vectorstore to see how it finds relevant information for your questions.")
+                st.markdown(f"Vectorstore contains {st.session_state['statistics']} entries")
                 if st.session_state.get('vecstore') is None:
                     st.warning("Vector store is not available. Please check configuration and restart the app.")
                 else:
-                    st.multiselect("Select collection to search", options=st.session_state['vecstore'].get_collections(), default=st.session_state['vecstore'].get_collections() if st.session_state['vecstore'].get_collections() else None, key="search_collection")
-                    # st.text_input("Enter a search query", key="search_query")
-                    query = st_keyup("Search in all collections", debounce=200)
-                    if query:
+                    st.multiselect("Select collections to search in", options=st.session_state['vecstore'].get_collections(), default=st.session_state['vecstore'].get_collections() if st.session_state['vecstore'].get_collections() else None, key="search_collection")
+                    with st.form("all_collections_search_form"):
+                        query = st.text_input("Search in all collections", key="all_collections_search_query")
+                        search_all = st.form_submit_button("Search")
+                    if search_all and query:
                         for coll_name in st.session_state.search_collection:
                             st.subheader(f"Results from collection: {coll_name}")
                             search_collection(query, coll_name)
