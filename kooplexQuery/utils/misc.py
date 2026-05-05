@@ -366,8 +366,9 @@ class DatabaseServerManager:
             if "value" in input_params:
                 input_params["value"] = "" if input_params["value"] is None else str(input_params["value"])
 
-            # Forward text input parameters
-            input_params.setdefault("label_visibility", "hidden")
+            # Use collapsed label to avoid extra vertical spacer that can push
+            # the input onto a visually separate row.
+            input_params.setdefault("label_visibility", "collapsed")
             return c2.text_input(label, **input_params)
 
        
