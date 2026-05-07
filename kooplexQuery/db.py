@@ -7,8 +7,9 @@ from io import StringIO
 class BufferedResult(object):
     """Small compatibility wrapper for buffered DB rows."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, columns=None):
         self._rows = rows
+        self._columns = list(columns or [])
 
     def fetchall(self):
         return self._rows
@@ -18,6 +19,9 @@ class BufferedResult(object):
 
     def fetchone(self):
         return self._rows[0] if self._rows else None
+
+    def keys(self):
+        return self._columns
 
     def __iter__(self):
         return iter(self._rows)
@@ -46,7 +50,7 @@ class DBQuery(object):
                 elif self.engine.dialect.name == 'mssql':
                     # Buffer results while the connection is still open.
                     cursor = con.execute(text(sql), subst)
-                    return BufferedResult(cursor.fetchall())
+                    return BufferedResult(cursor.fetchall(), columns=list(cursor.keys()))
 
     def query_to_df(self, sql, subst={}):
         if self.url:
