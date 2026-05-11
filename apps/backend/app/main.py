@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import chat, health, metadata, settings, validator, vectorstore
 from app.services.config_store import init_store, get_active_config_id, get_config, to_runtime_config
 from app.services.runtime_state import runtime_state
+from app.services.kooplex_bridge import persist_db_config_env
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -65,6 +66,7 @@ if _active_id is not None:
         _cfg = to_runtime_config(_row)
         _cfg["id"] = _active_id
         runtime_state.active_config = _cfg
+        persist_db_config_env(_cfg)
 
 
 api_app.include_router(health.router, tags=["health"])

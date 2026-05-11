@@ -13,9 +13,13 @@ class DBChat(object):
 
         load_dotenv("config.env")
 
-        schema_manager = os.getenv('CHAT_SCHEMA_MANAGER', 'schema_manager')
-        schema_manager_password = os.getenv('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
+        schema_manager = os.getenv('CHAT_SCHEMA_MANAGER', '')
+        schema_manager_password = os.getenv('CHAT_SCHEMA_MANAGER_PASSWORD', '')
 
+        if schema_manager == '' or schema_manager_password == '':
+            logging.warning("CHAT_SCHEMA_MANAGER or CHAT_SCHEMA_MANAGER_PASSWORD environment variable not set. Cannot create chat database if missing.")
+            return False
+        
         if (
             not database
             or not database.replace("_", "").isalnum()
@@ -84,7 +88,7 @@ WHERE schema_name = :schema;
                 r = con.execute(q, {'schema': self.schema}).scalar()
                 return r is not None
         except Exception as e:
-            print(f"Error checking schema: {e}\n If chat database is alredy initialized, and read-only, than ignore this!")
+            print(f"Error checking schema: {e}\n If chat database is already initialized, and read-only, than ignore this!")
             return False
 
     def _get_userid(self, username, email):

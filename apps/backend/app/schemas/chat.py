@@ -35,4 +35,30 @@ class RunQueryRequest(BaseModel):
 class StreamChatRequest(BaseModel):
     prompt: str
     model_name: str = "api"
+    model_provider: Optional[str] = None
     session_id: Optional[int] = None
+
+
+class SaveQueryForValidationRequest(BaseModel):
+    session_id: int
+    sql: str
+    model_name: str = "api"
+    model_provider: Optional[str] = None
+    question_content: Optional[str] = None
+    preview_only: bool = False
+
+
+class GeneratePlotCodeRequest(BaseModel):
+    session_id: int
+    model_name: str = "api"
+    model_provider: Optional[str] = None
+    sql_override: Optional[str] = None
+    plotting_request: Optional[str] = None
+
+
+class CorrectSqlRequest(BaseModel):
+    sql: str
+    error_message: str
+    history_summary: Optional[str] = None
+    model_name: str = "api"
+    model_provider: Optional[str] = None

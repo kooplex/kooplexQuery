@@ -11,7 +11,7 @@ from typing import AsyncIterator, Literal, Any, Dict, List
 from textwrap import dedent
 
 from mcp.server.fastmcp import FastMCP, Context
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -141,24 +141,11 @@ class RunInput(BaseModel):
 #    params: Dict[str, Any] | List[Any] | None = None
 #    fetch: Literal["none","one","all"] = "all"
     sql: str
-    params: object = Field(None, description="Either a dict for named params or a list/tuple for positional params")
-    fetch: str = Field("all", description="one of: none, one, all")
-
-    @field_validator("fetch")
-    @classmethod
-    def _fetch_ok(cls, v: str) -> str:
-        if v not in ("none", "one", "all"):
-            raise ValueError("fetch must be one of: none, one, all")
-        return v
-
-    @field_validator("params")
-    @classmethod
-    def _params_ok(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, (dict, list, tuple)):
-            return v
-        raise TypeError("params must be a dict, list, tuple, or null")
+    params: Dict[str, Any] | List[Any] | tuple[Any, ...] | None = Field(
+        None,
+        description="Either a dict for named params or a list/tuple for positional params",
+    )
+    fetch: Literal["none", "one", "all"] = Field("all", description="one of: none, one, all")
 
 class RunOutput(BaseModel):
 #    result: Any

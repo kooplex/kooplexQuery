@@ -108,6 +108,7 @@ export type ChatHistoryRow = {
 export type ModelRow = {
   model_name: string
   provider: string | null
+  reachable?: boolean
 }
 
 export type QueryResult = {
@@ -119,7 +120,16 @@ export type QueryResult = {
 export type StreamChatPayload = {
   prompt: string
   model_name?: string
+  model_provider?: string | null
   session_id?: number | null
+}
+
+export type PlotCodePayload = {
+  session_id: number
+  model_name?: string
+  model_provider?: string | null
+  sql_override?: string
+  plotting_request?: string
 }
 
 const API_BASE = (() => {
@@ -249,6 +259,7 @@ export const api = {
     request<{ reset: boolean }>('/api/vectorstore/reset', {
       method: 'POST',
     }),
+  listSessions: () => request<{ items: Array<{ session_id: number; timestamp: string; content: string }> }>('/api/chat/sessions'),
   createSession: (payload: {
     username: string
     email: string
@@ -261,6 +272,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getSessionHistory: (sessionId: number) => request<{ items: ChatHistoryRow[] }>(`/api/chat/sessions/${sessionId}/history`),
+  undoSessionLastTurn: (sessionId: number) =>
+    request<{ deleted: number; deleted_ids: number[] }>(`/api/chat/sessions/${sessionId}/undo`, {
+      method: 'POST',
+    }),
   saveMessagePair: (payload: {
     session_id: number
     user_prompt: string
@@ -282,6 +297,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  saveQueryForValidation: (payload: {
+    session_id: number
+    sql: string
+    model_name?: string
+    model_provider?: string | null
+    question_content?: string
+    preview_only?: boolean
+  }) =>
+    request<{ saved: boolean; question_content: string }>('/api/chat/queries/prepare-save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   runQuery: (payload: { sql: string }) =>
     request<QueryResult>('/api/chat/query', {
       method: 'POST',
@@ -292,6 +319,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
       signal,
+    }),
+  generatePlotCode: (payload: PlotCodePayload) =>
+    request<{ code: string; sql_used: string }>('/api/chat/plot-code', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  correctSql: (payload: { sql: string; error_message: string; history_summary?: string; model_name?: string; model_provider?: string | null }) =>
+    request<{ corrected_sql: string; raw_response: string }>('/api/chat/correct-sql', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
   listModels: () => request<{ items: ModelRow[] }>('/api/chat/models'),
   addModel: (payload: { model_name: string; provider?: string | null }) =>
@@ -304,4 +341,9 @@ export const api = {
     if (provider) params.set('provider', provider)
     return request<{ deleted: boolean }>(`/api/chat/models?${params.toString()}`, { method: 'DELETE' })
   },
+  runCode: (payload: { code: string; sql?: string }) =>
+    request<{ plot_html: string | null; stdout: string; stderr: string; error: string | null }>(
+      '/api/chat/run-code',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
 }

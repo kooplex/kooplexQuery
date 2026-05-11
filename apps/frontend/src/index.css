@@ -1,61 +1,171 @@
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --kd-primary: #1f1f1f;
+  --kd-gray: #a7a7a7;
+  --kd-gray-dark: #606060;
+  --kd-gray-text: #989898;
+  --kd-hover-white: #f7f7f7;
+  --kd-hover-gray: #f4f4f4;
+  --kd-border: #e5e7eb;
+  --kd-bg: #f9fafb;
+  --kd-bg-dark: #ebebeb;
+  --kd-blue: #1e67fe;
+  --kd-error: #ef483c;
+  --kd-delete: #e61f00;
+  --kd-user-chat-bg: #e8edf6;
+  --kd-user-chat-border: #cdd3dc;
+  --kd-agent-reply-bg: #f8f8f8;
+  --kd-agent-reply-border: #e5e7eb;
+  --kd-code-bg: #282c34;
+  --kd-shadow: 0px 0px 4px 0px rgba(121, 121, 121, 0.10);
+  --kd-radius: 0.5rem;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--kd-primary);
+  background: #ffffff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+[data-theme="dark"] {
+  --kd-primary: #e8e8e8;
+  --kd-gray: #707070;
+  --kd-gray-dark: #a0a0a0;
+  --kd-gray-text: #b0b0b0;
+  --kd-hover-white: #2a2a2a;
+  --kd-hover-gray: #333333;
+  --kd-border: #404040;
+  --kd-bg: #1f1f1f;
+  --kd-bg-dark: #2a2a2a;
+  --kd-blue: #4a9eff;
+  --kd-error: #ff6b5b;
+  --kd-delete: #ff4d26;
+  --kd-user-chat-bg: #1e3a5f;
+  --kd-user-chat-border: #3d5a8a;
+  --kd-agent-reply-bg: #252525;
+  --kd-agent-reply-border: #383838;
+  --kd-code-bg: #1a1a1a;
+  --kd-shadow: 0px 0px 4px 0px rgba(0, 0, 0, 0.40);
 }
+
+[data-theme="dark"] body,
+[data-theme="dark"] #root {
+  background: #1a1a1a;
+  color: var(--kd-primary);
+}
+
+[data-theme="dark"] .app {
+  background: #1a1a1a;
+  color: var(--kd-primary);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  background: #2a2a2a;
+  color: var(--kd-primary);
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: var(--kd-gray);
+}
+
+[data-theme="dark"] fieldset {
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] legend {
+  color: var(--kd-primary);
+}
+
+[data-theme="dark"] button {
+  background: #2a2a2a;
+  color: var(--kd-primary);
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] button:hover {
+  background: #353535;
+}
+
+[data-theme="dark"] pre {
+  background: var(--kd-code-bg);
+  color: #e0e0e0;
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] .settings-section {
+  background: #252525;
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] .settings-section-title {
+  border-color: var(--kd-border);
+  color: var(--kd-primary);
+}
+
+[data-theme="dark"] .chat-sidebar {
+  background: #252525;
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] .chat-composer {
+  background: #252525;
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] .agent-response-panel {
+  background: linear-gradient(180deg, #2a3a4a 0%, #1f2f3f 100%);
+  border-color: #3a5a7a;
+}
+
+[data-theme="dark"] .agent-response-panel > label {
+  color: #8ac0ff;
+}
+
+[data-theme="dark"] .chat-question-field {
+  background: linear-gradient(180deg, #2a3a4a 0%, #1f2f3f 100%);
+  border-color: #3a5a7a;
+}
+
+[data-theme="dark"] .chat-question-field input {
+  background: #2a2a2a;
+  border-color: #3a5a7a;
+}
+
+[data-theme="dark"] .chat-question-field input:focus {
+  border-color: #4a86ff;
+  box-shadow: 0 0 0 2px rgba(74, 134, 255, 0.35);
+}
+
+[data-theme="dark"] .stream-chunk {
+  background: #252525;
+  border-color: var(--kd-border);
+}
+
+[data-theme="dark"] .session-list-item {
+  background: #252525;
+  border-color: var(--kd-border);
+  color: var(--kd-primary);
+}
+
+[data-theme="dark"] .session-list-item:hover {
+  background: #2a3a4a;
+  border-color: #3a5a7a;
+}
+
+
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  text-align: left;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
@@ -64,48 +174,29 @@
 
 body {
   margin: 0;
+  background: #ffffff;
+  color: var(--kd-primary);
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kd-gray) transparent;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+::-webkit-scrollbar-thumb {
+  background-color: var(--kd-gray);
+  border-radius: 10px;
+  visibility: hidden;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+::-webkit-scrollbar-thumb:hover {
+  visibility: visible;
 }
+
+

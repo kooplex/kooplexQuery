@@ -3,7 +3,12 @@ from sqlalchemy import text
 
 from app.schemas.settings import ConfigPayload, ConnectRequest
 from app.services import config_store
-from app.services.kooplex_bridge import create_chat_database_if_missing, get_db_chat, get_db_source
+from app.services.kooplex_bridge import (
+    create_chat_database_if_missing,
+    get_db_chat,
+    get_db_source,
+    persist_db_config_env,
+)
 from app.services.runtime_state import runtime_state
 
 router = APIRouter()
@@ -50,6 +55,7 @@ def select_database_config(config_id: int) -> dict[str, object]:
     runtime_cfg["id"] = config_id
     runtime_state.active_config = runtime_cfg
     config_store.set_active_config_id(config_id)
+    persist_db_config_env(runtime_cfg)
     return {"active": runtime_cfg}
 
 
@@ -72,6 +78,7 @@ def connect_databases(payload: ConnectRequest) -> dict[str, object]:
         )
 
     runtime_state.active_config = data
+    persist_db_config_env(data)
     db_source = get_db_source()
 
     # Connectivity check to source DB.
