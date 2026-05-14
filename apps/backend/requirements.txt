@@ -17,3 +17,8 @@ langchain-mcp-adapters>=0.1.13
 langchain-ollama
 langchain-text-splitters>=1.0.0
 langgraph-checkpoint-sqlite>=3.0.1
+plotly
+pandas
+pyodbc
+matplotlib
+seaborn

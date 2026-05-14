@@ -209,3 +209,6 @@ config.env
 dev.ipynb
 start.sh
 chroma_vector_db/
+apps/backend/data/*
+
+*.sqlite*

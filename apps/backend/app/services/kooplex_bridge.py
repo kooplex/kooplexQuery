@@ -631,6 +631,7 @@ async def stream_chat_chunks(
     prompt: str,
     model_name: str = "api",
     model_provider: str | None = None,
+    session_id: int | None = None,
 ) -> AsyncIterator[str]:
     if not prompt or not prompt.strip():
         raise HTTPException(status_code=400, detail="prompt cannot be empty")
@@ -662,6 +663,22 @@ async def stream_chat_chunks(
     else:
         motor.current_model = selected_model_name
     motor._chat_history = CustomChatHistory()
+
+    if session_id is not None:
+        try:
+            prior_history = fetch_chat_history(session_id)
+        except Exception:
+            prior_history = []
+
+        for row in prior_history:
+            role = str(row.get("role") or "").strip().lower()
+            content = str(row.get("content") or "").strip()
+            if not content or role == "system":
+                continue
+            if role in {"user", "human"}:
+                motor._chat_history.add_user_message(content)
+            else:
+                motor._chat_history.add_ai_message(content)
 
     initial_system_message = _build_initial_system_message(
         db_chat=motor.db_chat,

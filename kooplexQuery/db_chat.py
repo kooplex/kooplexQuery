@@ -180,18 +180,29 @@ ORDER BY reference, id
 # SET content=:content
 # WHERE reference=:reference
 #         """)
-        q = text("""
+        try:
+           q = text("""
 INSERT INTO knowledge (reference, content)
 VALUES (:reference, :content)
 ON CONFLICT (reference) 
 DO UPDATE SET 
     content = EXCLUDED.content
         """)
-        #ON CONFLICT (reference) DO UPDATE SET content = EXCLUDED.content
-        with self.engine.connect() as con:
-            r = con.execute(q, {'reference': reference, 'content': content})
-            con.commit()
-            return r  # returns True if an existing record was updated, False if no record with the reference exists
+          #ON CONFLICT (reference) DO UPDATE SET content = EXCLUDED.content
+           with self.engine.connect() as con:
+             r = con.execute(q, {'reference': reference, 'content': content})
+             con.commit()
+             return r  # returns True if an existing record was updated, False if no record with the reference exists
+        except:
+            q = text("""
+UPDATE knowledge
+SET content=:content
+WHERE reference=:reference
+        """)
+            with self.engine.connect() as con:
+               r = con.execute(q, {'reference': reference, 'content': content})
+               con.commit()
+               return r  # returns True if an existing record was updated, False if no record with the reference exists
 
 
     def save_chat_item(self, session_id, user_prompt, agent_response, model_name): #TODO: save model_name in DB

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
   api,
@@ -15,7 +17,7 @@ import {
 } from './api'
 import './App.css'
 
-type View = 'settings' | 'chat' | 'validator' | 'metadata'
+type View = 'settings' | 'chat' | 'validator' | 'metadata' | 'search-knowledge'
 
 type Status = {
   kind: 'success' | 'error' | 'info'
@@ -325,11 +327,14 @@ function App() {
   const [newModelProvider, setNewModelProvider] = useState('')
   const [chatQuestion, setChatQuestion] = useState('')
   const [chatSql, setChatSql] = useState('select 1 as value')
+  const [plottingInstructions, setPlottingInstructions] = useState('')
   const [agentResponse, setAgentResponse] = useState('')
+  const [editableAgentSql, setEditableAgentSql] = useState<Record<number, string>>({})
   const [codeRunResults, setCodeRunResults] = useState<Map<number, { plot_html: string | null; stdout: string; stderr: string; error: string | null }>>(new Map())
   const [pendingValidationQuestion, setPendingValidationQuestion] = useState('')
   const [showValidationConfirm, setShowValidationConfirm] = useState(false)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
+  const [queryResultSource, setQueryResultSource] = useState<string | null>(null)
   const [pendingUploadConnect, setPendingUploadConnect] = useState(false)
   const [uploadedConfigFileName, setUploadedConfigFileName] = useState('')
   const configUploadRef = useRef<HTMLInputElement | null>(null)
@@ -344,6 +349,11 @@ function App() {
     }
     localStorage.setItem('app-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    if (view !== 'validator') return
+    void loadExamples()
+  }, [view])
 
   // On mount: load saved configs and restore active config from backend
   useEffect(() => {
@@ -376,6 +386,12 @@ function App() {
             const label = sessionForm.label.trim() || `Session ${bootSession.session_id}`
             return [{ id: bootSession.session_id, label, timestamp: '' }, ...prev]
           })
+          try {
+            const historyResponse = await api.getSessionHistory(bootSession.session_id)
+            setHistory(historyResponse.items)
+          } catch {
+            setHistory([])
+          }
         } else {
           const usedSessionIds = new Set<number>(sessionsData.items.map((s) => s.session_id))
           setSessionId(createRandomUnusedSessionId(usedSessionIds))
@@ -446,6 +462,14 @@ function App() {
     if (!text) return false
     return text.includes('sqlalchemy') || text.includes('psycopg2') || text.includes('pymssql')
   }, [lastSqlError])
+
+  useEffect(() => {
+    const textareas = document.querySelectorAll<HTMLTextAreaElement>('textarea.agent-sql-editor')
+    textareas.forEach((textarea) => {
+      textarea.style.height = 'auto'
+      textarea.style.height = `${textarea.scrollHeight}px`
+    })
+  }, [editableAgentSql, parsedAgentResponse])
 
   const sqlCorrectionHistorySummary = useMemo(() => {
     const tail = conversations.slice(-6)
@@ -628,6 +652,43 @@ function App() {
     const response = await run(() => api.deleteExample(questionId), `Deleted question ${questionId}.`)
     if (!response) return
     await loadExamples()
+  }
+
+  async function loadExampleIntoChat(example: ExampleRow) {
+    // Create a new session for this example
+    const newSession = await run(() => api.createSession({ ...sessionForm, referenced_session_id: null }), 'New session created.')
+    if (!newSession?.session_id) return
+
+    const seeded = await run(
+      () => api.saveMessagePair({
+        session_id: newSession.session_id,
+        user_prompt: example.question_content,
+        agent_response: `Loaded validator example ${example.question_id}.\n\n\`\`\`sql\n${example.sql}\n\`\`\``,
+        model_name: selectedModel || 'api',
+      }),
+      'Example question and SQL inserted into chat history.',
+    )
+    if (!seeded) return
+
+    const historyResponse = await run(
+      () => api.getSessionHistory(newSession.session_id),
+      'Session history loaded.',
+    )
+
+    setSessionId(newSession.session_id)
+    setChatQuestion(example.question_content)
+    setChatSql(example.sql)
+    setHistory(historyResponse?.items ?? [])
+
+    // Update past sessions list
+    setPastSessions((prev) => {
+      if (prev.some((s) => s.id === newSession.session_id)) return prev
+      const label = `Validator Example ${example.question_id}`
+      return [{ id: newSession.session_id, label, timestamp: '' }, ...prev]
+    })
+
+    setView('chat')
+    setStatus({ kind: 'success', message: `Loaded validator example ${example.question_id} into new chat session.` })
   }
 
   async function loadMetadata() {
@@ -868,13 +929,47 @@ function App() {
     await loadModels()
   }
 
+  function renderQueryResultPanel() {
+    if (!queryResult) return null
+
+    return (
+      <article>
+        <h3>Query result ({queryResult.count})</h3>
+        <div className="result-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                {queryResult.columns.map((column, idx) => (
+                  <th key={`col-${idx}`}>{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {queryResult.rows.map((row, idx) => (
+                <tr key={`row-${idx}`}>
+                  <td>{idx + 1}</td>
+                  {row.map((cell, cellIdx) => (
+                    <td key={`cell-${idx}-${cellIdx}`}>
+                      <pre>{cell === null || cell === undefined ? '' : String(cell)}</pre>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    )
+  }
+
   async function executeQuery() {
     const sql = chatSql.trim()
     if (!sql) {
       setStatus({ kind: 'info', message: 'SQL is required.' })
       return
     }
-    await executeSqlText(sql)
+    await executeSqlText(sql, 'sandbox')
   }
 
   async function generatePlotCodeFromSql() {
@@ -885,17 +980,20 @@ function App() {
 
     const currentModel = models.find((m) => m.model_name === selectedModel)
     const sqlOverride = chatSql.trim() || undefined
+    const plottingRequest = plottingInstructions.trim() || undefined
     const response = await run(
       () => api.generatePlotCode({
         session_id: sessionId,
         model_name: selectedModel || 'api',
         model_provider: currentModel?.provider ?? null,
         sql_override: sqlOverride,
+        plotting_request: plottingRequest,
       }),
       'Plot code generated from SQL.',
     )
     if (!response) return
 
+    setEditableAgentSql({})
     setCodeRunResults(new Map())
     setAgentResponse(response.code)
     if (response.sql_used) {
@@ -928,6 +1026,7 @@ function App() {
     if (!response) return
 
     setChatSql(response.corrected_sql)
+    setEditableAgentSql({})
     setCodeRunResults(new Map())
     setAgentResponse(response.raw_response)
   }
@@ -948,13 +1047,15 @@ function App() {
     setCodeRunResults((prev) => new Map(prev).set(chunkIdx, result))
   }
 
-  async function executeSqlText(sqlText: string) {
+  async function executeSqlText(sqlText: string, source: string = 'sandbox') {
     const sql = sqlText.trim()
     if (!sql) {
       setStatus({ kind: 'info', message: 'SQL is required.' })
       return
     }
 
+    setQueryResultSource(source)
+    setQueryResult(null)
     setChatSql(sql)
     setLoading(true)
     setStatus(null)
@@ -986,6 +1087,7 @@ function App() {
 
     setLoading(true)
     setStatus(null)
+    setEditableAgentSql({})
     setAgentResponse('')
 
     try {
@@ -1138,6 +1240,7 @@ function App() {
         <button className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
         <button className={view === 'validator' ? 'active' : ''} onClick={() => setView('validator')}>Validator</button>
         <button className={view === 'metadata' ? 'active' : ''} onClick={() => setView('metadata')}>Metadata</button>
+        <button className={view === 'search-knowledge' ? 'active' : ''} onClick={() => setView('search-knowledge')}>Search Knowledge</button>
       </nav>
 
       {status && (
@@ -1163,8 +1266,8 @@ function App() {
               onChange={handleConfigUpload}
             />
             <div className="row-actions">
-              <button disabled={loading} onClick={refreshConfigs}>Load saved configs</button>
-              <button disabled={loading} onClick={refreshActiveConfig}>Load active config</button>
+              <button disabled={loading} onClick={refreshConfigs}>📂 Load saved configs</button>
+              <button disabled={loading} onClick={refreshActiveConfig}>📂 Load active config</button>
               <button disabled={loading} onClick={() => triggerConfigUpload(false)}>Upload config file</button>
               <button disabled={loading} onClick={() => triggerConfigUpload(true)}>Upload + connect</button>
             </div>
@@ -1186,12 +1289,12 @@ function App() {
                 ))}
               </select>
               <button disabled={loading || selectedConfigId === ''} onClick={loadFromSelected}>Use selected</button>
-              <button disabled={loading || selectedConfigId === ''} className="danger" onClick={deleteSelectedConfig}>Delete selected</button>
+              <button disabled={loading || selectedConfigId === ''} className="danger" onClick={deleteSelectedConfig}>🗑 Delete selected</button>
             </div>
 
             <div className="row-actions">
-              <button disabled={loading} onClick={() => downloadConfig('json')}>Download JSON</button>
-              <button disabled={loading} onClick={() => downloadConfig('yaml')}>Download YAML</button>
+              <button disabled={loading} onClick={() => downloadConfig('json')}>📥 Download JSON</button>
+              <button disabled={loading} onClick={() => downloadConfig('yaml')}>📥 Download YAML</button>
             </div>
 
             
@@ -1330,7 +1433,7 @@ function App() {
                   </label>
                   <div className="row-actions">
                     <button disabled={loading} onClick={createSession}>Create session</button>
-                    <button disabled={loading} onClick={loadHistory}>Load history</button>
+                    <button disabled={loading} onClick={loadHistory}>📂 Load history</button>
                   </div>
                   </div>
                 </details>
@@ -1396,8 +1499,8 @@ function App() {
               <article>
                 <h3>Chat history ({conversations.length} conversations)</h3>
                 <div className="conversation-list">
-                  {conversations.slice(1).map((conv, idx, arr) => {
-                    const isLatest = idx === arr.length - 1
+                  {conversations.map((conv, idx, arr) => {
+                    const isLatest = idx === arr.length - 1 && idx !== 0
                     const responseText = conv.assistantMessage?.content ?? ''
                     const segments = splitResponseIntoSegments(responseText)
 
@@ -1439,12 +1542,13 @@ function App() {
                                         <button
                                           type="button"
                                           disabled={loading}
-                                          onClick={() => { void executeSqlText(segment.content) }}
+                                          onClick={() => { void executeSqlText(segment.content, `history-${conv.id}-${segmentIndex}`) }}
                                         >
                                           Run SQL
                                         </button>
                                       </div>
                                     )}
+                                    {segment.language === 'sql' && queryResultSource === `history-${conv.id}-${segmentIndex}` && renderQueryResultPanel()}
                                   </div>
                                 ),
                               )}
@@ -1470,7 +1574,7 @@ function App() {
                 </div>
               </article>
 
-                <fieldset>
+                <fieldset className="sql-sandbox">
                   <legend>Query + message workflow</legend>
               <label>SQL
                 <textarea
@@ -1480,7 +1584,18 @@ function App() {
                 />
               </label>
               <div className="row-actions">
-                <button disabled={loading} onClick={executeQuery}>Run SQL</button>
+                <button disabled={loading} onClick={executeQuery}>▶ Run SQL</button>
+              </div>
+              {queryResultSource === 'sandbox' && renderQueryResultPanel()}
+              <label>Plotting instructions (optional)
+                <textarea
+                  className="code-area"
+                  placeholder="Specify any desired chart type, styling, or visualization preferences"
+                  value={plottingInstructions}
+                  onChange={(e) => setPlottingInstructions(e.target.value)}
+                />
+              </label>
+              <div className="row-actions">
                 <button disabled={loading || sessionId === ''} onClick={() => { void generatePlotCodeFromSql() }}>
                   Generate plot code
                 </button>
@@ -1523,29 +1638,42 @@ function App() {
 
                       const isSql = chunk.language === 'sql'
                       const isRunnable = !isSql && ['python', 'py', ''].includes(chunk.language)
+                      const currentSqlChunk = editableAgentSql[idx] ?? chunk.content
                       const codeResult = codeRunResults.get(idx)
                       return (
                         <article className="stream-chunk stream-chunk-code" key={`stream-code-${idx}`}>
                           <div className="stream-chunk-header">
                             <strong>{isSql ? 'SQL block' : `Code block (${chunk.language})`}</strong>
                           </div>
-                          <pre>{chunk.content}</pre>
+                          {isSql ? (
+                            <textarea
+                              className="code-area agent-sql-editor"
+                              value={currentSqlChunk}
+                              onChange={(e) => {
+                                const value = e.target.value
+                                setEditableAgentSql((prev) => ({ ...prev, [idx]: value }))
+                              }}
+                            />
+                          ) : (
+                            <pre>{chunk.content}</pre>
+                          )}
                           {isSql && (
                             <div className="row-actions">
                               <button
                                 disabled={loading}
-                                onClick={() => setChatSql(chunk.content)}
+                                onClick={() => setChatSql(currentSqlChunk)}
                               >
                                 Use SQL in editor
                               </button>
                               <button
                                 disabled={loading}
-                                onClick={() => executeSqlText(chunk.content)}
+                                onClick={() => executeSqlText(currentSqlChunk, `agent-${idx}`)}
                               >
-                                Run this SQL
+                                ▶ Run this SQL
                               </button>
                             </div>
                           )}
+                          {isSql && queryResultSource === `agent-${idx}` && renderQueryResultPanel()}
                           {isRunnable && (
                             <div className="row-actions">
                               <button
@@ -1584,7 +1712,7 @@ function App() {
                 )}
               </div>
               <div className="row-actions">
-                <button disabled={loading} onClick={saveQueryForValidation}>Save query for validation</button>
+                <button disabled={loading} onClick={saveQueryForValidation}>💾 Save query for validation</button>
                 <button
                   type="button"
                   disabled={loading || sessionId === ''}
@@ -1603,43 +1731,13 @@ function App() {
                       onChange={(e) => setPendingValidationQuestion(e.target.value)}
                     />
                     <div className="row-actions">
-                      <button disabled={loading} onClick={confirmSaveQueryForValidation}>Confirm save</button>
+                      <button disabled={loading} onClick={confirmSaveQueryForValidation}>💾 Confirm save</button>
                       <button disabled={loading} onClick={saveQueryForValidation}>Regenerate suggestion</button>
                       <button disabled={loading} className="danger" onClick={cancelValidationSave}>Cancel</button>
                     </div>
                   </fieldset>
                 )}
               </fieldset>
-
-              {queryResult && (
-                <article>
-                  <h3>Query result ({queryResult.count})</h3>
-                  <div className="result-scroll">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          {queryResult.columns.map((column, idx) => (
-                            <th key={`col-${idx}`}>{column}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {queryResult.rows.map((row, idx) => (
-                          <tr key={`row-${idx}`}>
-                            <td>{idx + 1}</td>
-                            {row.map((cell, cellIdx) => (
-                              <td key={`cell-${idx}-${cellIdx}`}>
-                                <pre>{cell === null || cell === undefined ? '' : String(cell)}</pre>
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </article>
-              )}
 
               <div className="chat-composer">
                 <div className="chat-composer-row">
@@ -1651,7 +1749,7 @@ function App() {
                       onKeyDown={(e) => onEnterPress(e, () => { void streamChatResponse() })}
                     />
                   </label>
-                  <button disabled={loading} onClick={streamChatResponse}>Submit</button>
+                  <button disabled={loading} onClick={streamChatResponse}>📤 Submit</button>
                 </div>
               </div>
             </div>
@@ -1663,7 +1761,7 @@ function App() {
           <section>
             <h2>Validator</h2>
             <div className="row-actions">
-              <button disabled={loading} onClick={loadExamples}>Load examples</button>
+              <button disabled={loading} onClick={loadExamples}>📂 Load examples</button>
             </div>
             <table>
               <thead>
@@ -1671,22 +1769,28 @@ function App() {
                   <th>ID</th>
                   <th>Type</th>
                   <th>Question</th>
+                  <th>SQL Query</th>
                   <th>Score</th>
                   <th>Public</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {examples.map((row) => (
+                {examples
+                  .slice()
+                  .sort((a, b) => Number(Boolean(a.public)) - Number(Boolean(b.public)))
+                  .map((row) => (
                   <tr key={row.question_id}>
                     <td>{row.question_id}</td>
                     <td>{row.type}</td>
                     <td title={row.question_content}>{row.question_content}</td>
+                    <td title={row.sql}><code>{row.sql.substring(0, 50)}{row.sql.length > 50 ? '...' : ''}</code></td>
                     <td>{row.score ?? '-'}</td>
                     <td>{String(row.public)}</td>
                     <td className="cell-actions">
+                      <button disabled={loading} onClick={() => loadExampleIntoChat(row)}>Load into chat</button>
                       <button disabled={loading} onClick={() => validateExample(row.question_id)}>Validate</button>
-                      <button disabled={loading} className="danger" onClick={() => removeExample(row.question_id)}>Delete</button>
+                      <button disabled={loading} className="danger" onClick={() => removeExample(row.question_id)}>🗑 Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -1699,8 +1803,87 @@ function App() {
           <section>
             <h2>Metadata</h2>
             <div className="row-actions">
-              <button disabled={loading} onClick={loadMetadata}>Load metadata</button>
-              <button disabled={loading} onClick={loadVectorstoreStats}>Load vectorstore stats</button>
+              <button disabled={loading} onClick={loadMetadata}>📂 Load metadata</button>
+            </div>
+
+            <fieldset>
+              <legend>Knowledge Manager</legend>
+              <label>Reference
+                <input
+                  value={knowledgeReference}
+                  onChange={(e) => setKnowledgeReference(e.target.value)}
+                  placeholder="schema | instruction | business_rules"
+                />
+              </label>
+              <label>Content
+                <textarea
+                  className="code-area"
+                  value={knowledgeContent}
+                  onChange={(e) => setKnowledgeContent(e.target.value)}
+                  placeholder="Paste schema, instructions, or notes"
+                />
+              </label>
+              <div className="row-actions">
+                <button disabled={loading} onClick={saveKnowledge}>
+                  {editingKnowledgeId ? '💾 Update knowledge' : '💾 Add knowledge'}
+                </button>
+                <button disabled={loading} onClick={clearKnowledgeForm}>Clear</button>
+              </div>
+            </fieldset>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, auto) minmax(200px, auto) 2fr', gap: '24px' }}>
+              <article>
+                <h3>Tables ({tables.length})</h3>
+                <ul className="list">
+                  {tables.map((t, idx) => (
+                    <li key={`${t.table}-${idx}`}>
+                      <strong>{t.table}</strong>
+                      <span>{t.description ?? '(no description)'}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+
+              <article>
+                <h3>Columns ({columns.length})</h3>
+                <ul className="list">
+                  {columns.map((c, idx) => (
+                    <li key={`${c.table}-${c.column}-${idx}`}>
+                      <strong>{c.table}.{c.column}</strong>
+                      <span>{c.type}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+
+              <article>
+                <h3>Knowledge ({knowledge.length})</h3>
+                <ul className="list">
+                  {knowledge.map((k) => (
+                    <li key={k.id}>
+                      <strong>{k.reference}</strong>
+                      <div style={{ fontSize: '0.9em', lineHeight: '1.5' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {k.content?.trim() || '(empty)'}
+                        </ReactMarkdown>
+                      </div>
+                      <div className="row-actions">
+                        <button disabled={loading} onClick={() => startEditingKnowledge(k)}>✏️ Edit</button>
+                        <button disabled={loading} className="danger" onClick={() => removeKnowledge(k)}>🗑 Delete</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {view === 'search-knowledge' && (
+          <section>
+            <h2>Search Knowledge</h2>
+            <div className="row-actions">
+              <button disabled={loading} onClick={loadVectorstoreStats}>📂 Load vectorstore stats</button>
             </div>
 
             <fieldset>
@@ -1738,73 +1921,6 @@ function App() {
               </div>
               <pre>{JSON.stringify(vectorStats, null, 2)}</pre>
             </fieldset>
-
-            <fieldset>
-              <legend>Knowledge Manager</legend>
-              <label>Reference
-                <input
-                  value={knowledgeReference}
-                  onChange={(e) => setKnowledgeReference(e.target.value)}
-                  placeholder="schema | instruction | business_rules"
-                />
-              </label>
-              <label>Content
-                <textarea
-                  className="code-area"
-                  value={knowledgeContent}
-                  onChange={(e) => setKnowledgeContent(e.target.value)}
-                  placeholder="Paste schema, instructions, or notes"
-                />
-              </label>
-              <div className="row-actions">
-                <button disabled={loading} onClick={saveKnowledge}>
-                  {editingKnowledgeId ? 'Update knowledge' : 'Add knowledge'}
-                </button>
-                <button disabled={loading} onClick={clearKnowledgeForm}>Clear</button>
-              </div>
-            </fieldset>
-
-            <div className="grid three-col">
-              <article>
-                <h3>Tables ({tables.length})</h3>
-                <ul className="list">
-                  {tables.map((t, idx) => (
-                    <li key={`${t.table}-${idx}`}>
-                      <strong>{t.table}</strong>
-                      <span>{t.description ?? '(no description)'}</span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article>
-                <h3>Columns ({columns.length})</h3>
-                <ul className="list">
-                  {columns.map((c, idx) => (
-                    <li key={`${c.table}-${c.column}-${idx}`}>
-                      <strong>{c.table}.{c.column}</strong>
-                      <span>{c.type}</span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article>
-                <h3>Knowledge ({knowledge.length})</h3>
-                <ul className="list">
-                  {knowledge.map((k) => (
-                    <li key={k.id}>
-                      <strong>{k.reference}</strong>
-                      <span>{k.content ?? '(empty)'}</span>
-                      <div className="row-actions">
-                        <button disabled={loading} onClick={() => startEditingKnowledge(k)}>Edit</button>
-                        <button disabled={loading} className="danger" onClick={() => removeKnowledge(k)}>Delete</button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
 
             <article>
               <h3>Vectorstore Search Results</h3>

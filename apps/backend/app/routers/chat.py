@@ -210,6 +210,7 @@ async def stream_chat_response(payload: StreamChatRequest) -> StreamingResponse:
                 payload.prompt,
                 payload.model_name,
                 payload.model_provider,
+                payload.session_id,
             ):
                 collected.append(chunk)
                 yield chunk
