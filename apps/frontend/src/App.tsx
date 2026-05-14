@@ -283,6 +283,11 @@ function onEnterPress(
   action()
 }
 
+function makeAutoSessionLabel(prefix: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `${prefix} ${stamp}`
+}
+
 function App() {
   const [view, setView] = useState<View>('settings')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -323,6 +328,7 @@ function App() {
   const [history, setHistory] = useState<ChatHistoryRow[]>([])
   const [models, setModels] = useState<ModelRow[]>([])
   const [selectedModel, setSelectedModel] = useState('api')
+  const [selectedModelProvider, setSelectedModelProvider] = useState<string | null>(null)
   const [newModelName, setNewModelName] = useState('')
   const [newModelProvider, setNewModelProvider] = useState('')
   const [chatQuestion, setChatQuestion] = useState('')
@@ -369,6 +375,7 @@ function App() {
         setModels(modelsData.items)
         if (modelsData.items.length > 0) {
           setSelectedModel(modelsData.items[0].model_name)
+          setSelectedModelProvider(modelsData.items[0].provider ?? null)
         }
         if (sessionsData.items.length > 0) {
           setPastSessions(sessionsData.items.map((s) => ({
@@ -378,7 +385,11 @@ function App() {
           })))
         }
         // Create a real persisted session on startup so saves always target a valid session id.
-        const bootSession = await api.createSession({ ...sessionForm, referenced_session_id: null })
+        const bootSession = await api.createSession({
+          ...sessionForm,
+          label: sessionForm.label.trim() || makeAutoSessionLabel('Boot session'),
+          referenced_session_id: null,
+        })
         if (bootSession?.session_id) {
           setSessionId(bootSession.session_id)
           setPastSessions((prev) => {
@@ -656,7 +667,14 @@ function App() {
 
   async function loadExampleIntoChat(example: ExampleRow) {
     // Create a new session for this example
-    const newSession = await run(() => api.createSession({ ...sessionForm, referenced_session_id: null }), 'New session created.')
+    const newSession = await run(
+      () => api.createSession({
+        ...sessionForm,
+        label: makeAutoSessionLabel(`Validator Example ${example.question_id}`),
+        referenced_session_id: null,
+      }),
+      'New session created.',
+    )
     if (!newSession?.session_id) return
 
     const seeded = await run(
@@ -830,7 +848,11 @@ function App() {
 
   async function startNewSessionLocally() {
     const response = await run(
-      () => api.createSession({ ...sessionForm, referenced_session_id: null }),
+      () => api.createSession({
+        ...sessionForm,
+        label: sessionForm.label.trim() || makeAutoSessionLabel('Session'),
+        referenced_session_id: null,
+      }),
       'New session created.',
     )
 
@@ -899,8 +921,12 @@ function App() {
     const response = await run(() => api.listModels(), 'Models loaded.')
     if (!response) return
     setModels(response.items)
-    if (response.items.length > 0 && !selectedModel) {
+    const hasSelected = response.items.some(
+      (m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null),
+    )
+    if (response.items.length > 0 && (!selectedModel || !hasSelected)) {
       setSelectedModel(response.items[0].model_name)
+      setSelectedModelProvider(response.items[0].provider ?? null)
     }
   }
 
@@ -978,7 +1004,9 @@ function App() {
       return
     }
 
-    const currentModel = models.find((m) => m.model_name === selectedModel)
+    const currentModel =
+      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
+      ?? models.find((m) => m.model_name === selectedModel)
     const sqlOverride = chatSql.trim() || undefined
     const plottingRequest = plottingInstructions.trim() || undefined
     const response = await run(
@@ -1012,7 +1040,9 @@ function App() {
       return
     }
 
-    const currentModel = models.find((m) => m.model_name === selectedModel)
+    const currentModel =
+      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
+      ?? models.find((m) => m.model_name === selectedModel)
     const response = await run(
       () => api.correctSql({
         sql,
@@ -1083,7 +1113,9 @@ function App() {
       return
     }
 
-    const currentModel = models.find((m) => m.model_name === selectedModel)
+    const currentModel =
+      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
+      ?? models.find((m) => m.model_name === selectedModel)
 
     setLoading(true)
     setStatus(null)
@@ -1146,7 +1178,9 @@ function App() {
       return
     }
 
-    const currentModel = models.find((m) => m.model_name === selectedModel)
+    const currentModel =
+      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
+      ?? models.find((m) => m.model_name === selectedModel)
     const response = await run(
       () => api.saveQueryForValidation({
         session_id: sessionId,
@@ -1181,7 +1215,9 @@ function App() {
       return
     }
 
-    const currentModel = models.find((m) => m.model_name === selectedModel)
+    const currentModel =
+      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
+      ?? models.find((m) => m.model_name === selectedModel)
     const response = await run(
       () => api.saveQueryForValidation({
         session_id: sessionId,
@@ -1447,8 +1483,11 @@ function App() {
                       {models.map((m, idx) => (
                         <li
                           key={`${m.model_name}-${m.provider ?? 'none'}-${idx}`}
-                          className={`model-select-item ${m.reachable ? 'model-available' : 'model-unreachable'}${m.model_name === selectedModel ? ' selected' : ''}`}
-                          onClick={() => setSelectedModel(m.model_name)}
+                          className={`model-select-item ${m.reachable ? 'model-available' : 'model-unreachable'}${m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null) ? ' selected' : ''}`}
+                          onClick={() => {
+                            setSelectedModel(m.model_name)
+                            setSelectedModelProvider(m.provider ?? null)
+                          }}
                         >
                           <strong>{m.model_name}</strong>
                           {m.provider && <span>{m.provider}</span>}
