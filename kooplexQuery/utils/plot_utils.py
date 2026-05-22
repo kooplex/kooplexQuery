@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, text
 import os
 import pandas as pd
 from dotenv import load_dotenv
-load_dotenv("config.env")
+load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env'))
 _ge = lambda x,d: os.getenv(x, d)
 hostname=_ge('DB_HOST', 'localhost')
 port=int(_ge('DB_PORT', 5432))

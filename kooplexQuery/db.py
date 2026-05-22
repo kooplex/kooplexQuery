@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 import requests
 from pandas import pandas
 from io import StringIO
@@ -32,11 +33,29 @@ class DBQuery(object):
         if url:
             self.url = url
         elif type=="postgres":
-            connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
-            self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+            connectionstring = URL.create(
+                "postgresql+psycopg2",
+                username=user,
+                password=password,
+                host=hostname,
+                port=port,
+                database=database
+            )
+            # self.engine = create_engine(connectionstring, connect_args={"options": f"-c search_path={schema}"})
+            self.engine = create_engine(connectionstring)
+            with self.engine.connect() as connection:
+                # Set the schema safely here
+                connection.execute(text(f"SET search_path TO {schema};"))
             self.schema=schema
         elif type=="mssql":
-            connectionstring = f"mssql+pymssql://{user}:{password}@{hostname}:{port}/{database}"
+            connectionstring = URL.create(
+                "mssql+pymssql",
+                username=user,
+                password=password,
+                host=hostname,
+                port=port,
+                database=database
+            )
             self.engine = create_engine(connectionstring)
 
     def query(self, sql, subst={}):

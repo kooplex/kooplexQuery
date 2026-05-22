@@ -94,7 +94,7 @@
 }
 
 [data-theme="dark"] pre {
-  background: var(--kd-code-bg);
+  /* background: var(--kd-code-bg); */
   color: #e0e0e0;
   border-color: var(--kd-border);
 }

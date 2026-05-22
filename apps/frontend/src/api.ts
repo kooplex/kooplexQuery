@@ -35,6 +35,9 @@ export type StoredConfig = {
   db_type: string | null
   db_schema: string | null
   db_title: string | null
+  db_tag: string | null
+  db_publication: string | null
+  db_short_description: string | null
   chat_hostname: string | null
   chat_port: number | null
   chat_database: string | null
@@ -210,6 +213,11 @@ export const api = {
   saveConfig: (payload: ConfigPayload) =>
     request<{ id: number }>('/api/settings/database-configs', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateConfig: (id: number, payload: ConfigPayload) =>
+    request<{ updated: boolean; id: number }>(`/api/settings/database-configs/${id}`, {
+      method: 'PUT',
       body: JSON.stringify(payload),
     }),
   deleteConfig: (id: number) =>

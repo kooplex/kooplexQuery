@@ -356,7 +356,7 @@ def run_code(payload: RunCodeRequest) -> dict[str, object]:
                         break
 
             if fig is not None:
-                plot_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+                plot_html = fig.to_html(full_html=False, include_plotlyjs=True)
         except ImportError:
             pass  # plotly not installed — no plot output
 

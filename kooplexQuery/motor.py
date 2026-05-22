@@ -49,9 +49,7 @@ def _normalize_ollama_base_url(provider: str | None = None) -> str:
     raw_provider = provider or _ge('OLLAMA_HOST', 'http://localhost')
     if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', raw_provider):
         raw_provider = f'http://{raw_provider}'
-    parsed = urlparse(raw_provider)
-    if parsed.port is None:
-        raw_provider = f"{raw_provider.rstrip('/')}:{int(_ge('OLLAMA_PORT', 11434))}"
+    # parsed = urlparse(raw_provider)
     normalized = raw_provider.rstrip('/')
     if not normalized.endswith('/v1'):
         normalized = f'{normalized}/v1'

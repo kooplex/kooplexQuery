@@ -2,7 +2,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from app.services import config_store
 from app.services.kooplex_bridge import get_db_chat, get_db_source
+from app.services.runtime_state import runtime_state
 
 router = APIRouter()
 
@@ -10,6 +12,29 @@ router = APIRouter()
 class KnowledgeUpsertRequest(BaseModel):
     reference: str
     content: str
+
+
+def _loaded_config_id() -> int | None:
+    if runtime_state.active_config:
+        config_id = runtime_state.active_config.get("id")
+        if isinstance(config_id, int):
+            return config_id
+    return config_store.get_active_config_id()
+
+
+def _sync_sqlite_metadata_from_chat_db() -> None:
+    try:
+        config_id = _loaded_config_id()
+        if config_id is None:
+            return
+        db_chat = get_db_chat()
+        keys, data = db_chat.fetch_all_knowledge()
+        items = [dict(zip(keys, row)) for row in data]
+        config_store.init_store()
+        config_store.sync_metadata_from_knowledge(items, config_id)
+    except Exception:
+        # Do not block metadata CRUD if local sync is unavailable.
+        return
 
 
 @router.get("/knowledge")
@@ -24,6 +49,7 @@ def list_knowledge() -> dict[str, object]:
 def create_knowledge(payload: KnowledgeUpsertRequest) -> dict[str, object]:
     db_chat = get_db_chat()
     db_chat.save_knowledge(payload.reference, payload.content)
+    _sync_sqlite_metadata_from_chat_db()
     return {"saved": True, "reference": payload.reference}
 
 
@@ -31,6 +57,7 @@ def create_knowledge(payload: KnowledgeUpsertRequest) -> dict[str, object]:
 def update_knowledge(reference: str, payload: KnowledgeUpsertRequest) -> dict[str, object]:
     db_chat = get_db_chat()
     db_chat.save_knowledge(reference, payload.content)
+    _sync_sqlite_metadata_from_chat_db()
     return {"updated": True, "reference": reference}
 
 
@@ -41,6 +68,7 @@ def delete_knowledge(knowledge_id: int) -> dict[str, object]:
     q = text(f"DELETE FROM {schema_name}.knowledge WHERE id = :id")
     with db_chat.engine.begin() as con:
         con.execute(q, {"id": knowledge_id})
+    _sync_sqlite_metadata_from_chat_db()
     return {"deleted": True, "knowledge_id": knowledge_id}
 
 

@@ -1,3 +1,6 @@
+import logging
+from urllib.parse import quote_plus
+import os
 from sqlalchemy import create_engine, text
 
 class DBChat(object):
@@ -11,7 +14,7 @@ class DBChat(object):
         from dotenv import load_dotenv
         import os
 
-        load_dotenv("config.env")
+        load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env'))
 
         schema_manager = os.getenv('CHAT_SCHEMA_MANAGER', '')
         schema_manager_password = os.getenv('CHAT_SCHEMA_MANAGER_PASSWORD', '')
@@ -28,7 +31,7 @@ class DBChat(object):
             raise ValueError(f"Invalid chat database name: {database}")
 
         connectionstring = (
-            f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}"
+            f"postgresql+psycopg2://{quote_plus(schema_manager)}:{quote_plus(schema_manager_password)}"
             f"@{hostname}:{port}/postgres"
         )
         engine = create_engine(connectionstring, isolation_level="AUTOCOMMIT")
@@ -49,7 +52,7 @@ class DBChat(object):
             engine.dispose()
 
     def __init__(self, hostname, port, database, schema, user, password, generated_callback=lambda c: None):
-        connectionstring = f"postgresql+psycopg2://{user}:{password}@{hostname}:{port}/{database}"
+        connectionstring = f"postgresql+psycopg2://{quote_plus(user)}:{quote_plus(password)}@{hostname}:{port}/{database}"
         schema_search_path = self._quote_ident(schema)
         
         self.cb_generated = generated_callback
@@ -76,7 +79,7 @@ class DBChat(object):
         schema_manager = _ge('CHAT_SCHEMA_MANAGER', 'schema_manager')
         schema_manager_password = _ge('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
         
-        connectionstring = f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}@{self.hostname}:{self.port}/{self.database}"
+        connectionstring = f"postgresql+psycopg2://{quote_plus(schema_manager)}:{quote_plus(schema_manager_password)}@{self.hostname}:{self.port}/{self.database}"
         engine = create_engine(connectionstring)
         q = text("""
 SELECT schema_name
@@ -330,14 +333,15 @@ WHERE id = :question_id
     # Functions for creating and managing the database schema
     def create_schema(self):
         from dotenv import load_dotenv
-        load_dotenv("config.env")
+        import os
+        load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env'))
         # Connect with schema manager role to create the schema
         import os
         _ge = lambda x,d: os.getenv(x, d)
         schema_manager = _ge('CHAT_SCHEMA_MANAGER', 'schema_manager')
         schema_manager_password = _ge('CHAT_SCHEMA_MANAGER_PASSWORD', 'schema_manager_password')
         
-        connectionstring = f"postgresql+psycopg2://{schema_manager}:{schema_manager_password}@{self.hostname}:{self.port}/{self.database}"
+        connectionstring = f"postgresql+psycopg2://{quote_plus(schema_manager)}:{quote_plus(schema_manager_password)}@{self.hostname}:{self.port}/{self.database}"
         engine = create_engine(connectionstring)
 
 

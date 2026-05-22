@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
   api,
@@ -10,14 +8,12 @@ import {
   type QueryResult,
   type ExampleRow,
   type StoredConfig,
-  type TableRow,
-  type ColumnRow,
   type KnowledgeRow,
   toPayload,
 } from './api'
 import './App.css'
 
-type View = 'settings' | 'chat' | 'validator' | 'metadata' | 'search-knowledge'
+type View = 'home' | 'settings' | 'chat' | 'validator' | 'metadata' | 'search-knowledge'
 
 type Status = {
   kind: 'success' | 'error' | 'info'
@@ -221,6 +217,11 @@ function splitResponseIntoSegments(content: string): ResponseSegment[] {
   return segments
 }
 
+function isPythonLanguage(language: string): boolean {
+  const normalized = language.trim().toLowerCase()
+  return normalized === 'py' || normalized.startsWith('python')
+}
+
 type StreamChunk =
   | { type: 'text'; content: string }
   | { type: 'code'; content: string; language: string }
@@ -288,13 +289,23 @@ function makeAutoSessionLabel(prefix: string): string {
   return `${prefix} ${stamp}`
 }
 
+function isLikelyUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim())
+}
+
 function App() {
-  const [view, setView] = useState<View>('settings')
+  const rightSidebarMinWidth = 280
+  const rightSidebarMaxWidth = 720
+  const isDev = import.meta.env.DEV
+  const [view, setView] = useState<View>('home')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('app-theme')
     return (saved as 'light' | 'dark') || 'light'
   })
   const [status, setStatus] = useState<Status>(null)
+  const [showLeftSidebar, setShowLeftSidebar] = useState(true)
+  const [showRightSidebar, setShowRightSidebar] = useState(true)
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(360)
   const [lastSqlError, setLastSqlError] = useState<string>('')
   const [loading, setLoading] = useState(false)
 
@@ -304,9 +315,9 @@ function App() {
   const [activeConfig, setActiveConfig] = useState<(ConfigPayload & { id?: number }) | null>(null)
 
   const [examples, setExamples] = useState<ExampleRow[]>([])
-  const [tables, setTables] = useState<TableRow[]>([])
-  const [columns, setColumns] = useState<ColumnRow[]>([])
   const [knowledge, setKnowledge] = useState<KnowledgeRow[]>([])
+  const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<number | ''>('')
+  const [newKnowledgeReference, setNewKnowledgeReference] = useState('')
   const [knowledgeReference, setKnowledgeReference] = useState('')
   const [knowledgeContent, setKnowledgeContent] = useState('')
   const [editingKnowledgeId, setEditingKnowledgeId] = useState<number | null>(null)
@@ -318,7 +329,7 @@ function App() {
   const [vectorResults, setVectorResults] = useState<Record<string, Array<{ content: string; metadata: Record<string, unknown>; score: number }>>>({})
 
   const [sessionId, setSessionId] = useState<number | ''>('')
-  const [pastSessions, setPastSessions] = useState<Array<{ id: number; label: string; timestamp: string }>>([])  
+  const [pastSessions, setPastSessions] = useState<Array<{ id: number; label: string; timestamp: string }>>([])
   const [sessionForm, setSessionForm] = useState({
     username: 'demo-user',
     email: 'demo@example.com',
@@ -333,10 +344,13 @@ function App() {
   const [newModelProvider, setNewModelProvider] = useState('')
   const [chatQuestion, setChatQuestion] = useState('')
   const [chatSql, setChatSql] = useState('select 1 as value')
+  const [chatPython, setChatPython] = useState('# Python code here')
   const [plottingInstructions, setPlottingInstructions] = useState('')
   const [agentResponse, setAgentResponse] = useState('')
   const [editableAgentSql, setEditableAgentSql] = useState<Record<number, string>>({})
   const [codeRunResults, setCodeRunResults] = useState<Map<number, { plot_html: string | null; stdout: string; stderr: string; error: string | null }>>(new Map())
+  const [pythonCodeRunResults, setPythonCodeRunResults] = useState<Map<string, { plot_html: string | null; stdout: string; stderr: string; error: string | null }>>(new Map())
+  const [pythonResultSource, setPythonResultSource] = useState<string | null>(null)
   const [pendingValidationQuestion, setPendingValidationQuestion] = useState('')
   const [showValidationConfirm, setShowValidationConfirm] = useState(false)
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
@@ -344,7 +358,23 @@ function App() {
   const [pendingUploadConnect, setPendingUploadConnect] = useState(false)
   const [uploadedConfigFileName, setUploadedConfigFileName] = useState('')
   const configUploadRef = useRef<HTMLInputElement | null>(null)
+  const rightSidebarResizeRef = useRef({
+    active: false,
+    startX: 0,
+    startWidth: 360,
+  })
   const parsedAgentResponse = useMemo(() => parseStreamChunks(agentResponse), [agentResponse])
+
+  function startRightSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
+    rightSidebarResizeRef.current = {
+      active: true,
+      startX: event.clientX,
+      startWidth: rightSidebarWidth,
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    event.preventDefault()
+  }
 
   // Apply theme to document
   useEffect(() => {
@@ -361,17 +391,54 @@ function App() {
     void loadExamples()
   }, [view])
 
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const state = rightSidebarResizeRef.current
+      if (!state.active) return
+
+      const nextWidth = state.startWidth + (state.startX - event.clientX)
+      const boundedWidth = Math.min(rightSidebarMaxWidth, Math.max(rightSidebarMinWidth, nextWidth))
+      setRightSidebarWidth(boundedWidth)
+    }
+
+    const stopResizing = () => {
+      if (!rightSidebarResizeRef.current.active) return
+      rightSidebarResizeRef.current.active = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', stopResizing)
+
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', stopResizing)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [])
+
+  useEffect(() => {
+    if (view !== 'home') return
+    if (knowledge.length > 0) return
+
+    void refreshKnowledge(true)
+  }, [view, knowledge.length])
+
   // On mount: load saved configs and restore active config from backend
   useEffect(() => {
     async function init() {
       try {
-        const [configsData, activeData, modelsData, sessionsData] = await Promise.all([
+        const [configsData, activeData, modelsData, sessionsData, knowledgeData] = await Promise.all([
           api.listConfigs(),
           api.getActive(),
           api.listModels(),
           api.listSessions().catch(() => ({ items: [] })),
+          api.listKnowledge().catch(() => ({ items: [] })),
         ])
         setConfigs(configsData.items)
+        setKnowledge(knowledgeData.items)
         setModels(modelsData.items)
         if (modelsData.items.length > 0) {
           setSelectedModel(modelsData.items[0].model_name)
@@ -474,6 +541,46 @@ function App() {
     return text.includes('sqlalchemy') || text.includes('psycopg2') || text.includes('pymssql')
   }, [lastSqlError])
 
+  const selectedKnowledge = useMemo(() => {
+    if (selectedKnowledgeId === '') return null
+    return knowledge.find((item) => item.id === selectedKnowledgeId) ?? null
+  }, [knowledge, selectedKnowledgeId])
+
+  const homeDatasets = useMemo(() => {
+    return configs.map((cfg) => {
+      const title = (cfg.db_title ?? '').trim() || 'Untitled'
+      return {
+        id: cfg.id,
+        title,
+        tag: (cfg.db_tag ?? '').trim(),
+        url: (cfg.db_url ?? '').trim(),
+        publication: (cfg.db_publication ?? '').trim(),
+        shortDescription: (cfg.db_short_description ?? '').trim(),
+        host: cfg.db_hostname ?? '',
+        port: cfg.db_port ?? '',
+        database: cfg.db_database ?? '',
+      }
+    })
+  }, [configs])
+
+  const homeDatasetDebug = useMemo(() => {
+    return homeDatasets.map((dataset) => ({
+      title: dataset.title,
+      hasTag: Boolean(dataset.tag.trim()),
+      hasPublication: Boolean(dataset.publication.trim()),
+      hasShortDescription: Boolean(dataset.shortDescription.trim()),
+      url: dataset.url,
+    }))
+  }, [homeDatasets])
+
+  useEffect(() => {
+    if (!selectedKnowledge) return
+    setEditingKnowledgeId(selectedKnowledge.id)
+    setEditingKnowledgeReference(selectedKnowledge.reference)
+    setKnowledgeReference(selectedKnowledge.reference)
+    setKnowledgeContent(selectedKnowledge.content ?? '')
+  }, [selectedKnowledge])
+
   useEffect(() => {
     const textareas = document.querySelectorAll<HTMLTextAreaElement>('textarea.agent-sql-editor')
     textareas.forEach((textarea) => {
@@ -495,6 +602,45 @@ function App() {
       })
       .join('\n\n')
   }, [conversations])
+
+  function getCurrentModel(): ModelRow | null {
+    return (
+      models.find(
+        (m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null),
+      )
+      ?? models.find((m) => m.model_name === selectedModel)
+      ?? null
+    )
+  }
+
+  function requireSessionId(message = 'Set or create a session first.'): number | null {
+    if (sessionId === '') {
+      setStatus({ kind: 'info', message })
+      return null
+    }
+    return sessionId
+  }
+
+  function requireSelectedConfigId(message: string): number | null {
+    if (selectedConfigId === '') {
+      setStatus({ kind: 'info', message })
+      return null
+    }
+    return selectedConfigId
+  }
+
+  function getSelectedConfigOrStatus(): StoredConfig | null {
+    const id = requireSelectedConfigId('Select a config first.')
+    if (id === null) return null
+
+    const selected = configs.find((c) => c.id === id)
+    if (!selected) {
+      setStatus({ kind: 'error', message: 'Selected config not found.' })
+      return null
+    }
+
+    return selected
+  }
 
   async function run<T>(fn: () => Promise<T>, successMsg?: string): Promise<T | undefined> {
     setLoading(true)
@@ -518,6 +664,29 @@ function App() {
     setConfigs(data.items)
   }
 
+  async function refreshKnowledge(silent = true) {
+    const response = silent
+      ? await api.listKnowledge().catch(() => null)
+      : await run(() => api.listKnowledge(), 'Knowledge loaded from metadata database.')
+
+    if (!response) return
+
+    const items = response.items
+    setKnowledge(items)
+    setSelectedKnowledgeId((prev) => {
+      if (items.length === 0) return ''
+      if (prev !== '' && items.some((item) => item.id === prev)) return prev
+      return items[0].id
+    })
+
+    const configResponse = silent
+      ? await api.listConfigs().catch(() => null)
+      : await run(() => api.listConfigs())
+    if (configResponse) {
+      setConfigs(configResponse.items)
+    }
+  }
+
   async function refreshActiveConfig() {
     const data = await run(() => api.getActive())
     if (!data) return
@@ -526,41 +695,47 @@ function App() {
   }
 
   async function loadFromSelected() {
-    if (selectedConfigId === '') {
-      setStatus({ kind: 'info', message: 'Select a config first.' })
-      return
-    }
-
-    const selected = configs.find((c) => c.id === selectedConfigId)
-    if (!selected) {
-      setStatus({ kind: 'error', message: 'Selected config not found.' })
-      return
-    }
+    const selected = getSelectedConfigOrStatus()
+    if (!selected) return
 
     setForm(toPayload(selected))
     setUploadedConfigFileName('')
     const response = await run(() => api.selectConfig(selected.id), 'Config selected in backend runtime.')
     if (!response) return
     setActiveConfig(response.active)
+    await refreshKnowledge(true)
   }
 
   async function deleteSelectedConfig() {
-    if (selectedConfigId === '') {
-      setStatus({ kind: 'info', message: 'Select a config to delete first.' })
-      return
-    }
+    const configId = requireSelectedConfigId('Select a config to delete first.')
+    if (configId === null) return
 
     const response = await run(
-      () => api.deleteConfig(selectedConfigId),
+      () => api.deleteConfig(configId),
       'Selected configuration deleted.',
     )
     if (!response) return
 
-    if (activeConfig?.id === selectedConfigId) {
+    if (activeConfig?.id === configId) {
       setActiveConfig(null)
     }
     setSelectedConfigId('')
     await refreshConfigs()
+  }
+
+  async function updateSelectedConfig() {
+    const configId = requireSelectedConfigId('Select a config to update first.')
+    if (configId === null) return
+
+    const updated = await run(
+      () => api.updateConfig(configId, form),
+      'Selected configuration updated.',
+    )
+    if (!updated) return
+
+    await refreshConfigs()
+    await refreshActiveConfig()
+    await refreshKnowledge(true)
   }
 
   function downloadConfig(format: 'json' | 'yaml') {
@@ -598,6 +773,7 @@ function App() {
     if (!response) return
     setActiveConfig(response.active)
     await refreshConfigs()
+    await refreshKnowledge(true)
   }
 
   async function connect(createDb: boolean) {
@@ -710,19 +886,7 @@ function App() {
   }
 
   async function loadMetadata() {
-    const [tablesResponse, columnsResponse, knowledgeResponse] = await Promise.all([
-      run(() => api.listTables()),
-      run(() => api.listColumns()),
-      run(() => api.listKnowledge()),
-    ])
-
-    if (tablesResponse) setTables(tablesResponse.items)
-    if (columnsResponse) setColumns(columnsResponse.items)
-    if (knowledgeResponse) setKnowledge(knowledgeResponse.items)
-
-    if (tablesResponse || columnsResponse || knowledgeResponse) {
-      setStatus({ kind: 'success', message: 'Metadata loaded from backend.' })
-    }
+    await refreshKnowledge(false)
   }
 
   async function loadVectorstoreStats() {
@@ -777,13 +941,6 @@ function App() {
     setEditingKnowledgeReference('')
   }
 
-  function startEditingKnowledge(item: KnowledgeRow) {
-    setEditingKnowledgeId(item.id)
-    setEditingKnowledgeReference(item.reference)
-    setKnowledgeReference(item.reference)
-    setKnowledgeContent(item.content ?? '')
-  }
-
   async function saveKnowledge() {
     const reference = knowledgeReference.trim()
     const content = knowledgeContent.trim()
@@ -809,8 +966,51 @@ function App() {
         )
 
     if (!response) return
-    clearKnowledgeForm()
+    if (!editingKnowledgeId) {
+      clearKnowledgeForm()
+    }
     await loadMetadata()
+  }
+
+  async function addEmptyKnowledgeRow() {
+    const reference = newKnowledgeReference.trim()
+    if (!reference) {
+      setStatus({ kind: 'info', message: 'Knowledge reference is required.' })
+      return
+    }
+
+    if (reference.length > 64) {
+      setStatus({ kind: 'error', message: 'Knowledge reference must be at most 64 characters.' })
+      return
+    }
+
+    const existing = knowledge.find((item) => item.reference === reference)
+    if (existing) {
+      setSelectedKnowledgeId(existing.id)
+      setStatus({ kind: 'info', message: `Knowledge ${reference} already exists. Selected existing row.` })
+      return
+    }
+
+    const created = await run(
+      () => api.createKnowledge({ reference, content: '' }),
+      `Knowledge ${reference} created with empty content.`,
+    )
+    if (!created) return
+
+    setNewKnowledgeReference('')
+
+    const knowledgeResponse = await run(() => api.listKnowledge())
+    if (!knowledgeResponse) return
+
+    const items = knowledgeResponse.items
+    setKnowledge(items)
+    const createdRow = items.find((item) => item.reference === reference)
+    if (!createdRow) {
+      setStatus({ kind: 'error', message: `Knowledge ${reference} was not persisted by backend.` })
+      return
+    }
+
+    setSelectedKnowledgeId(createdRow.id)
   }
 
   async function removeKnowledge(item: KnowledgeRow) {
@@ -822,6 +1022,10 @@ function App() {
 
     if (editingKnowledgeId === item.id) {
       clearKnowledgeForm()
+    }
+
+    if (selectedKnowledgeId === item.id) {
+      setSelectedKnowledgeId('')
     }
     await loadMetadata()
   }
@@ -989,6 +1193,33 @@ function App() {
     )
   }
 
+  function renderPythonResultPanel(source: string) {
+    const result = pythonCodeRunResults.get(source)
+    if (!result) return null
+
+    return (
+      <article className="code-run-output">
+        {result.error && (
+          <pre className="code-run-error">{result.error}</pre>
+        )}
+        {result.stdout && (
+          <pre className="code-run-stdout">{result.stdout}</pre>
+        )}
+        {result.stderr && (
+          <pre className="code-run-stderr">{result.stderr}</pre>
+        )}
+        {result.plot_html && (
+          <iframe
+            className="code-run-plot"
+            srcDoc={result.plot_html}
+            sandbox="allow-scripts"
+            title={`plot-${source}`}
+          />
+        )}
+      </article>
+    )
+  }
+
   async function executeQuery() {
     const sql = chatSql.trim()
     if (!sql) {
@@ -999,19 +1230,15 @@ function App() {
   }
 
   async function generatePlotCodeFromSql() {
-    if (sessionId === '') {
-      setStatus({ kind: 'info', message: 'Set or create a session first.' })
-      return
-    }
+    const currentSessionId = requireSessionId()
+    if (currentSessionId === null) return
 
-    const currentModel =
-      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
-      ?? models.find((m) => m.model_name === selectedModel)
+    const currentModel = getCurrentModel()
     const sqlOverride = chatSql.trim() || undefined
     const plottingRequest = plottingInstructions.trim() || undefined
     const response = await run(
       () => api.generatePlotCode({
-        session_id: sessionId,
+        session_id: currentSessionId,
         model_name: selectedModel || 'api',
         model_provider: currentModel?.provider ?? null,
         sql_override: sqlOverride,
@@ -1040,9 +1267,7 @@ function App() {
       return
     }
 
-    const currentModel =
-      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
-      ?? models.find((m) => m.model_name === selectedModel)
+    const currentModel = getCurrentModel()
     const response = await run(
       () => api.correctSql({
         sql,
@@ -1106,6 +1331,38 @@ function App() {
     }
   }
 
+  async function executePythonText(pythonCode: string, source: string = 'sandbox') {
+    const code = pythonCode.trim()
+    if (!code) {
+      setStatus({ kind: 'info', message: 'Python code is required.' })
+      return
+    }
+
+    setPythonResultSource(source)
+    setPythonCodeRunResults((prev) => {
+      const updated = new Map(prev)
+      updated.delete(source)
+      return updated
+    })
+    setChatPython(code)
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await api.runCode({ code })
+      setPythonCodeRunResults((prev) => {
+        const updated = new Map(prev)
+        updated.set(source, response)
+        return updated
+      })
+      setStatus({ kind: 'success', message: 'Code executed successfully.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setStatus({ kind: 'error', message })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function streamChatResponse() {
     const prompt = chatQuestion.trim()
     if (!prompt) {
@@ -1113,9 +1370,7 @@ function App() {
       return
     }
 
-    const currentModel =
-      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
-      ?? models.find((m) => m.model_name === selectedModel)
+    const currentModel = getCurrentModel()
 
     setLoading(true)
     setStatus(null)
@@ -1167,10 +1422,8 @@ function App() {
   }
 
   async function saveQueryForValidation() {
-    if (sessionId === '') {
-      setStatus({ kind: 'info', message: 'Set or create a session first.' })
-      return
-    }
+    const currentSessionId = requireSessionId()
+    if (currentSessionId === null) return
 
     const sql = chatSql.trim()
     if (!sql) {
@@ -1178,12 +1431,10 @@ function App() {
       return
     }
 
-    const currentModel =
-      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
-      ?? models.find((m) => m.model_name === selectedModel)
+    const currentModel = getCurrentModel()
     const response = await run(
       () => api.saveQueryForValidation({
-        session_id: sessionId,
+        session_id: currentSessionId,
         sql,
         model_name: selectedModel || 'api',
         model_provider: currentModel?.provider ?? null,
@@ -1198,10 +1449,8 @@ function App() {
   }
 
   async function confirmSaveQueryForValidation() {
-    if (sessionId === '') {
-      setStatus({ kind: 'info', message: 'Set or create a session first.' })
-      return
-    }
+    const currentSessionId = requireSessionId()
+    if (currentSessionId === null) return
 
     const sql = chatSql.trim()
     if (!sql) {
@@ -1215,12 +1464,10 @@ function App() {
       return
     }
 
-    const currentModel =
-      models.find((m) => m.model_name === selectedModel && (m.provider ?? null) === (selectedModelProvider ?? null))
-      ?? models.find((m) => m.model_name === selectedModel)
+    const currentModel = getCurrentModel()
     const response = await run(
       () => api.saveQueryForValidation({
-        session_id: sessionId,
+        session_id: currentSessionId,
         sql,
         model_name: selectedModel || 'api',
         model_provider: currentModel?.provider ?? null,
@@ -1272,6 +1519,7 @@ function App() {
       </header>
 
       <nav className="nav">
+        <button className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>Home</button>
         <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>Settings</button>
         <button className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
         <button className={view === 'validator' ? 'active' : ''} onClick={() => setView('validator')}>Validator</button>
@@ -1286,6 +1534,119 @@ function App() {
       )}
 
       <main className="panel">
+        {view === 'home' && (
+          <section className="home-page">
+            <div className="home-hero">
+              <div className="home-hero-label">Text-to-SQL · LLM-Powered Query Interface</div>
+              <h2 className="home-hero-title">Ask questions.<br /><span>Get answers from data.</span></h2>
+              <p className="home-hero-desc">
+                KooplexQuery translates natural language questions into SQL, executes them against scientific
+                databases, and returns answers with explanations and figures - powered by locally hosted or
+                cloud-based language models with full control over data privacy.
+              </p>
+              <div className="home-pipeline">
+                <span className="home-pipeline-step">Your question</span>
+                <span className="home-pipeline-arrow">-&gt;</span>
+                <span className="home-pipeline-step">LLM -&gt; SQL</span>
+                <span className="home-pipeline-arrow">-&gt;</span>
+                <span className="home-pipeline-step">Database</span>
+                <span className="home-pipeline-arrow">-&gt;</span>
+                <span className="home-pipeline-step">Answer + Figures</span>
+              </div>
+            </div>
+
+            <div className="home-section">
+              <div className="home-section-header">
+                <span className="home-section-title">Available Databases</span>
+                <div className="home-section-line" />
+              </div>
+              <div className="home-server-grid">
+                {homeDatasets.map((dataset) => (
+                  <article key={dataset.id} className="home-server-card">
+                    <div className="home-server-card-head">
+                      <span className="home-server-name">{dataset.title}</span>
+                      <span className="home-server-badge">{dataset.tag || ''}</span>
+                    </div>
+                    <p className="home-server-desc">
+                      {dataset.shortDescription || 'No short_description metadata available.'}
+                    </p>
+                    <div className="home-server-links">
+                      {dataset.url ? (
+                        isLikelyUrl(dataset.url) ? (
+                          <a className="home-link-btn" href={dataset.url} target="_blank" rel="noreferrer">{dataset.url}</a>
+                        ) : (
+                          <span className="home-link-btn">{dataset.url}</span>
+                        )
+                      ) : (
+                        <span className="home-link-empty" />
+                      )}
+                      {dataset.publication ? (
+                        isLikelyUrl(dataset.publication) ? (
+                          <a className="home-link-btn ref" href={dataset.publication} target="_blank" rel="noreferrer">Publication</a>
+                        ) : (
+                          <span className="home-link-btn ref">{dataset.publication}</span>
+                        )
+                      ) : (
+                        <span className="home-link-empty" />
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              
+            </div>
+
+            {/* <div className="home-section">
+              <div className="home-section-header">
+                <span className="home-section-title">Available Models</span>
+                <div className="home-section-line" />
+              </div>
+              <div className="home-models-box">
+                <div className="home-models-intro">
+                  KooplexQuery supports multiple inference backends. Local models run entirely on-premises for strict data privacy; HPC models leverage Hungary&apos;s national supercomputing cluster (Komondor); cloud models use external API services.
+                </div>
+                <div className="home-model-row">
+                  <div className="home-model-icon model-icon-local">L</div>
+                  <div className="home-model-info">
+                    <div className="home-model-name">qwen2.5-coder:14b <span className="home-model-tag">Local</span></div>
+                    <div className="home-model-meta">14B-parameter code-specialized model, runs on local inference server, optimized for SQL generation.</div>
+                  </div>
+                </div>
+                <div className="home-model-row">
+                  <div className="home-model-icon model-icon-hpc">H</div>
+                  <div className="home-model-info">
+                    <div className="home-model-name">Qwen/Qwen3-30B-A3B-FP8 <span className="home-model-tag">HPC · Komondor</span></div>
+                    <div className="home-model-meta">35B MoE model hosted on Komondor with higher capacity for complex multi-join SQL queries.</div>
+                  </div>
+                </div>
+                <div className="home-model-row">
+                  <div className="home-model-icon model-icon-cloud">C</div>
+                  <div className="home-model-info">
+                    <div className="home-model-name">gpt-4.1-mini <span className="home-model-tag">Cloud · OpenAI</span></div>
+                    <div className="home-model-meta">Cloud-hosted model with strong general reasoning, suitable where external API use is allowed.</div>
+                  </div>
+                </div>
+              </div>
+            </div> */}
+
+            <div className="home-section">
+              <div className="home-section-header">
+                <span className="home-section-title">About the Creator</span>
+                <div className="home-section-line" />
+              </div>
+              <article className="home-creator-card">
+                <div className="home-creator-logo">ELTE</div>
+                <div className="home-creator-info">
+                  <div className="home-creator-name">CsabaiBio Lab</div>
+                  <div className="home-creator-desc">Bioinformatics and computational biology research group at Eotvos Lorand University (ELTE), Budapest, developing open-source tools for biological data analysis, genomics, and AI-driven scientific discovery.</div>
+                  <a className="home-creator-link" href="https://csabaibio.elte.hu" target="_blank" rel="noreferrer">csabaibio.elte.hu</a>
+                </div>
+              </article>
+            </div>
+          </section>
+        )}
+
         {view === 'settings' && (
           <section>
             <h2>Backend Settings & Connect</h2>
@@ -1325,6 +1686,7 @@ function App() {
                 ))}
               </select>
               <button disabled={loading || selectedConfigId === ''} onClick={loadFromSelected}>Use selected</button>
+              <button disabled={loading || selectedConfigId === ''} onClick={updateSelectedConfig}>Update selected</button>
               <button disabled={loading || selectedConfigId === ''} className="danger" onClick={deleteSelectedConfig}>🗑 Delete selected</button>
             </div>
 
@@ -1348,7 +1710,7 @@ function App() {
                 <label>Password<input type="password" value={form.database_server.password ?? ''} onChange={(e) => updateDb('password', e.target.value)} /></label>
                 <label>Schema<input value={form.database_server.schema ?? ''} onChange={(e) => updateDb('schema', e.target.value)} /></label>
                 <label>Type<input value={form.database_server.type ?? ''} onChange={(e) => updateDb('type', e.target.value)} /></label>
-                <label>URL (optional)<input value={form.database_server.url ?? ''} onChange={(e) => updateDb('url', e.target.value)} /></label>
+                <label>URL (API)<input value={form.database_server.url ?? ''} onChange={(e) => updateDb('url', e.target.value)} /></label>
               </fieldset>
 
               <fieldset>
@@ -1421,7 +1783,19 @@ function App() {
         {view === 'chat' && (
           <section>
             <h2>Chat</h2>
-            <div className="chat-layout">
+            <div
+              className="chat-layout"
+              style={{
+                gridTemplateColumns: showLeftSidebar
+                  ? (showRightSidebar
+                    ? `280px minmax(0, 1fr) 10px ${rightSidebarWidth}px`
+                    : '280px minmax(0, 1fr)')
+                  : (showRightSidebar
+                    ? `minmax(0, 1fr) 10px ${rightSidebarWidth}px`
+                    : 'minmax(0, 1fr)'),
+              }}
+            >
+              {showLeftSidebar && (
               <aside className="chat-sidebar">
                 <button
                   type="button"
@@ -1533,10 +1907,29 @@ function App() {
                   </div>
                 </details>
               </aside>
+              )}
 
               <div className="chat-main">
-              <article>
-                <h3>Chat history ({conversations.length} conversations)</h3>
+                <div className="chat-main-header">
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => setShowLeftSidebar(!showLeftSidebar)}
+                    className="sidebar-toggle"
+                    title={showLeftSidebar ? 'Hide Session Sidebar' : 'Show Session Sidebar'}
+                  >
+                    {showLeftSidebar ? '◀ Hide' : '▶ Show'} Session Sidebar
+                  </button>
+                  <button 
+                    type="button"
+                    disabled={loading}
+                    onClick={() => setShowRightSidebar(!showRightSidebar)}
+                    className="sidebar-toggle"
+                    title={showRightSidebar ? 'Hide Code Editors' : 'Show Code Editors'}
+                  >
+                    {showRightSidebar ? '◀ Hide' : '▶ Show'} Code Editors
+                  </button>
+                </div>
                 <div className="conversation-list">
                   {conversations.map((conv, idx, arr) => {
                     const isLatest = idx === arr.length - 1 && idx !== 0
@@ -1557,7 +1950,8 @@ function App() {
                             </div>
                           )}
 
-                          {conv.assistantMessage ? (
+                          
+                          { conv.assistantMessage ? (
                             <div className="chat-bubble assistant">
                               <div className="chat-meta">{conv.assistantMessage.timestamp}</div>
                               {segments.map((segment, segmentIndex) =>
@@ -1588,6 +1982,25 @@ function App() {
                                       </div>
                                     )}
                                     {segment.language === 'sql' && queryResultSource === `history-${conv.id}-${segmentIndex}` && renderQueryResultPanel()}
+                                    {isPythonLanguage(segment.language) && (
+                                      <div className="row-actions conversation-actions">
+                                        <button
+                                          type="button"
+                                          disabled={loading}
+                                          onClick={() => setChatPython(segment.content)}
+                                        >
+                                          Copy to editor
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={loading}
+                                          onClick={() => { void executePythonText(segment.content, `history-${conv.id}-${segmentIndex}`) }}
+                                        >
+                                          ▶ Run code
+                                        </button>
+                                      </div>
+                                    )}
+                                    {isPythonLanguage(segment.language) && pythonResultSource === `history-${conv.id}-${segmentIndex}` && renderPythonResultPanel(`history-${conv.id}-${segmentIndex}`)}
                                   </div>
                                 ),
                               )}
@@ -1609,176 +2022,10 @@ function App() {
                         </div>
                       </details>
                     )
-                  })}
+                  })
+                  }
                 </div>
-              </article>
-
-                <fieldset className="sql-sandbox">
-                  <legend>Query + message workflow</legend>
-              <label>SQL
-                <textarea
-                  className="code-area"
-                  value={chatSql}
-                  onChange={(e) => setChatSql(e.target.value)}
-                />
-              </label>
-              <div className="row-actions">
-                <button disabled={loading} onClick={executeQuery}>▶ Run SQL</button>
-              </div>
-              {queryResultSource === 'sandbox' && renderQueryResultPanel()}
-              <label>Plotting instructions (optional)
-                <textarea
-                  className="code-area"
-                  placeholder="Specify any desired chart type, styling, or visualization preferences"
-                  value={plottingInstructions}
-                  onChange={(e) => setPlottingInstructions(e.target.value)}
-                />
-              </label>
-              <div className="row-actions">
-                <button disabled={loading || sessionId === ''} onClick={() => { void generatePlotCodeFromSql() }}>
-                  Generate plot code
-                </button>
-              </div>
-              {lastSqlError && (
-                <div className="sql-error-panel">
-                  <div className="sql-error-header">
-                    <strong>SQL execution error</strong>
-                    {hasSqlAlchemyError && (
-                      <button disabled={loading} onClick={() => { void correctSqlFromLastError() }}>
-                        Correct SQL
-                      </button>
-                    )}
-                  </div>
-                  <pre>{lastSqlError}</pre>
-                </div>
-              )}
-              {/* <div className="grid two-col">
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={chatPublic}
-                    onChange={(e) => setChatPublic(e.target.checked)}
-                  />
-                  Save query as public
-                </label>
-              </div> */}
-              <div className="agent-response-panel">
-                <label>Agent response</label>
-                {parsedAgentResponse.length > 0 && (
-                  <div className="stream-renderer">
-                    {parsedAgentResponse.map((chunk, idx) => {
-                      if (chunk.type === 'text') {
-                        return (
-                          <article className="stream-chunk stream-chunk-text" key={`stream-text-${idx}`}>
-                            <pre>{chunk.content}</pre>
-                          </article>
-                        )
-                      }
-
-                      const isSql = chunk.language === 'sql'
-                      const isRunnable = !isSql && ['python', 'py', ''].includes(chunk.language)
-                      const currentSqlChunk = editableAgentSql[idx] ?? chunk.content
-                      const codeResult = codeRunResults.get(idx)
-                      return (
-                        <article className="stream-chunk stream-chunk-code" key={`stream-code-${idx}`}>
-                          <div className="stream-chunk-header">
-                            <strong>{isSql ? 'SQL block' : `Code block (${chunk.language})`}</strong>
-                          </div>
-                          {isSql ? (
-                            <textarea
-                              className="code-area agent-sql-editor"
-                              value={currentSqlChunk}
-                              onChange={(e) => {
-                                const value = e.target.value
-                                setEditableAgentSql((prev) => ({ ...prev, [idx]: value }))
-                              }}
-                            />
-                          ) : (
-                            <pre>{chunk.content}</pre>
-                          )}
-                          {isSql && (
-                            <div className="row-actions">
-                              <button
-                                disabled={loading}
-                                onClick={() => setChatSql(currentSqlChunk)}
-                              >
-                                Use SQL in editor
-                              </button>
-                              <button
-                                disabled={loading}
-                                onClick={() => executeSqlText(currentSqlChunk, `agent-${idx}`)}
-                              >
-                                ▶ Run this SQL
-                              </button>
-                            </div>
-                          )}
-                          {isSql && queryResultSource === `agent-${idx}` && renderQueryResultPanel()}
-                          {isRunnable && (
-                            <div className="row-actions">
-                              <button
-                                disabled={loading}
-                                onClick={() => { void runCodeChunk(idx, chunk.content) }}
-                              >
-                                ▶ Run code
-                              </button>
-                            </div>
-                          )}
-                          {codeResult && (
-                            <div className="code-run-output">
-                              {codeResult.error && (
-                                <pre className="code-run-error">{codeResult.error}</pre>
-                              )}
-                              {codeResult.stdout && (
-                                <pre className="code-run-stdout">{codeResult.stdout}</pre>
-                              )}
-                              {codeResult.stderr && (
-                                <pre className="code-run-stderr">{codeResult.stderr}</pre>
-                              )}
-                              {codeResult.plot_html && (
-                                <iframe
-                                  className="code-run-plot"
-                                  srcDoc={codeResult.plot_html}
-                                  sandbox="allow-scripts"
-                                  title={`plot-${idx}`}
-                                />
-                              )}
-                            </div>
-                          )}
-                        </article>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-              <div className="row-actions">
-                <button disabled={loading} onClick={saveQueryForValidation}>💾 Save query for validation</button>
-                <button
-                  type="button"
-                  disabled={loading || sessionId === ''}
-                  onClick={() => { void undoLastTurn() }}
-                >
-                  Undo last turn
-                </button>
-              </div>
-                {showValidationConfirm && (
-                  <fieldset>
-                    <legend>Confirm final question</legend>
-                    <p>The LLM suggested this final question (possibly a refined version of the original):</p>
-                    <textarea
-                      className="code-area"
-                      value={pendingValidationQuestion}
-                      onChange={(e) => setPendingValidationQuestion(e.target.value)}
-                    />
-                    <div className="row-actions">
-                      <button disabled={loading} onClick={confirmSaveQueryForValidation}>💾 Confirm save</button>
-                      <button disabled={loading} onClick={saveQueryForValidation}>Regenerate suggestion</button>
-                      <button disabled={loading} className="danger" onClick={cancelValidationSave}>Cancel</button>
-                    </div>
-                  </fieldset>
-                )}
-              </fieldset>
-
-              <div className="chat-composer">
+                <div className="chat-composer">
                 <div className="chat-composer-row">
                   <label className="chat-question-field">Question
                     <input
@@ -1791,9 +2038,51 @@ function App() {
                   <button disabled={loading} onClick={streamChatResponse}>📤 Submit</button>
                 </div>
               </div>
-            </div>
+              </div>
+
+            {showRightSidebar && (
+              <div
+                className="chat-sidebar-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize right sidebar"
+                onPointerDown={startRightSidebarResize}
+              />
+            )}
+
+            <aside className="chat-right-sidebar" style={{ display: showRightSidebar ? 'flex' : 'none', width: `${rightSidebarWidth}px` }}>
+              <fieldset className="sql-sandbox">
+              <legend>SQL Sandbox</legend>
+              <label>SQL query
+                <textarea
+                  className="code-area sidebar-editor-textarea"
+                  value={chatSql}
+                  onChange={(e) => setChatSql(e.target.value)}
+                />
+              </label>
+              <div className="row-actions">
+                <button disabled={loading} onClick={executeQuery}>▶ Run SQL</button>
+              </div>
+              </fieldset>
+              <fieldset className="python-sandbox">
+              <legend>Python Code Editor</legend>
+              <label>Python code
+                <textarea
+                  className="code-area sidebar-editor-textarea"
+                  value={chatPython}
+                  onChange={(e) => setChatPython(e.target.value)}
+                />
+              </label>
+              <div className="row-actions">
+                <button disabled={loading} onClick={() => { void executePythonText(chatPython, 'sandbox') }}>▶ Run Python</button>
+              </div>
+              {pythonResultSource === 'sandbox' && renderPythonResultPanel('sandbox')}
+              </fieldset>
+              </aside>
+              
+             
           </div>
-          </section>
+        </section>
         )}
 
         {view === 'validator' && (
@@ -1847,74 +2136,84 @@ function App() {
 
             <fieldset>
               <legend>Knowledge Manager</legend>
-              <label>Reference
-                <input
-                  value={knowledgeReference}
-                  onChange={(e) => setKnowledgeReference(e.target.value)}
-                  placeholder="schema | instruction | business_rules"
-                />
-              </label>
-              <label>Content
-                <textarea
-                  className="code-area"
-                  value={knowledgeContent}
-                  onChange={(e) => setKnowledgeContent(e.target.value)}
-                  placeholder="Paste schema, instructions, or notes"
-                />
-              </label>
-              <div className="row-actions">
-                <button disabled={loading} onClick={saveKnowledge}>
-                  {editingKnowledgeId ? '💾 Update knowledge' : '💾 Add knowledge'}
-                </button>
-                <button disabled={loading} onClick={clearKnowledgeForm}>Clear</button>
+              <div className="field-row">
+                <label>Knowledge row</label>
+                <select
+                  value={selectedKnowledgeId}
+                  onChange={(e) => setSelectedKnowledgeId(e.target.value ? Number(e.target.value) : '')}
+                >
+                  <option value="">Select knowledge row</option>
+                  {knowledge.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.reference}
+                    </option>
+                  ))}
+                </select>
               </div>
-            </fieldset>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, auto) minmax(200px, auto) 2fr', gap: '24px' }}>
-              <article>
-                <h3>Tables ({tables.length})</h3>
-                <ul className="list">
-                  {tables.map((t, idx) => (
-                    <li key={`${t.table}-${idx}`}>
-                      <strong>{t.table}</strong>
-                      <span>{t.description ?? '(no description)'}</span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
+              <div className="knowledge-browser-layout">
+                <article className="knowledge-pane">
+                  <h3>Knowledge rows ({knowledge.length})</h3>
+                  <div className="result-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Reference</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {knowledge.map((item) => (
+                          <tr
+                            key={`knowledge-row-${item.id}`}
+                            className={selectedKnowledgeId === item.id ? 'knowledge-row-selected' : ''}
+                            onClick={() => setSelectedKnowledgeId(item.id)}
+                          >
+                            <td>{item.id}</td>
+                            <td>{item.reference}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="knowledge-add-row">
+                    <input
+                      value={newKnowledgeReference}
+                      onChange={(e) => setNewKnowledgeReference(e.target.value)}
+                      maxLength={64}
+                      placeholder="New reference"
+                      onKeyDown={(e) => onEnterPress(e, () => { void addEmptyKnowledgeRow() })}
+                    />
+                    <button disabled={loading} onClick={() => { void addEmptyKnowledgeRow() }}>
+                      + Add empty row
+                    </button>
+                  </div>
+                </article>
 
-              <article>
-                <h3>Columns ({columns.length})</h3>
-                <ul className="list">
-                  {columns.map((c, idx) => (
-                    <li key={`${c.table}-${c.column}-${idx}`}>
-                      <strong>{c.table}.{c.column}</strong>
-                      <span>{c.type}</span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article>
-                <h3>Knowledge ({knowledge.length})</h3>
-                <ul className="list">
-                  {knowledge.map((k) => (
-                    <li key={k.id}>
-                      <strong>{k.reference}</strong>
-                      <div style={{ fontSize: '0.9em', lineHeight: '1.5' }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {k.content?.trim() || '(empty)'}
-                        </ReactMarkdown>
+                <article className="knowledge-pane">
+                  <h3>Selected row content</h3>
+                  {selectedKnowledge ? (
+                    <>
+                      <p><strong>Reference:</strong> {selectedKnowledge.reference}</p>
+                      <div className="knowledge-content">
+                        <textarea
+                          className="code-area knowledge-content-editor"
+                          value={knowledgeContent}
+                          onChange={(e) => setKnowledgeContent(e.target.value)}
+                          placeholder="Edit selected knowledge content"
+                        />
                       </div>
                       <div className="row-actions">
-                        <button disabled={loading} onClick={() => startEditingKnowledge(k)}>✏️ Edit</button>
-                        <button disabled={loading} className="danger" onClick={() => removeKnowledge(k)}>🗑 Delete</button>
+                        <button disabled={loading || editingKnowledgeId === null} onClick={saveKnowledge}>💾 Update</button>
+                        <button disabled={loading} className="danger" onClick={() => removeKnowledge(selectedKnowledge)}>🗑 Delete</button>
                       </div>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
+                    </>
+                  ) : (
+                    <p className="muted-hint">Select a knowledge row to inspect its content.</p>
+                  )}
+                </article>
+              </div>
+            </fieldset>
           </section>
         )}
 

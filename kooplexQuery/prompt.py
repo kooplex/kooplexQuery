@@ -271,7 +271,7 @@ def prompt():
     # If environmental variables were not yet read then load it with dotenv
     if 'environment_variables_set' not in st.session_state or    st.session_state['environment_variables_set'] == False:
         from dotenv import load_dotenv
-        load_dotenv("config.env")
+        load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env'))
 
     # If motor startup failed, expose DB settings and stop the rest of the app flow.
     if st.session_state.get('db_config_set') is None:
@@ -998,7 +998,7 @@ def main():
 
     from dotenv import load_dotenv
     if not load_dotenv():
-        load_dotenv("config.env")
+        load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env'))
 
     # Check environment variables for base path and port, with defaults
     # And give a warning if the variable is not set

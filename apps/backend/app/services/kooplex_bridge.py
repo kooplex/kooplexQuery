@@ -56,7 +56,10 @@ def persist_db_config_env(config: dict | None = None) -> Path:
     cfg = config if config is not None else get_active_config()
     db_cfg = cfg.get("database_server", {})
 
-    env_path = REPO_ROOT / "config.env"
+    default_env_path = Path(__file__).resolve().parents[2] / "config.env"
+    configured_env_path = (os.getenv("KOOPLEX_CONFIG_ENV_PATH") or "").strip()
+    env_path = Path(configured_env_path) if configured_env_path else default_env_path
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"DB_HOST={db_cfg.get('hostname') or 'localhost'}",
         f"DB_PORT={int(db_cfg.get('port') or 5432)}",
@@ -361,11 +364,18 @@ def fetch_chat_history(session_id: int) -> list[dict]:
 
 def _plotting_runtime_instruction() -> str:
     return (
+        "## Instructions for plotting\n"
+        "Use the below instruction only if the 'plot' keyword is present in the user's request:\n"
         "When you generate Python plotting code for this app, follow this runtime contract strictly:\n"
-        "- Use Python code that loads DB settings from a config.env file via dotenv and creates SQLAlchemy engine.\n"
-        "- The absolute path to config.env is available as: os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env')\n"
-        "- Use this pattern (replacing the sql query and plotting style) and adapt the connectionstring to DB_TYPE value:\n"
+        "- The app renders plots from a Plotly Figure object stored in variable fig.\n"
+        "- Always assign the final plot to variable fig (plotly.graph_objects.Figure).\n"
+        "- Never call fig.show() or any GUI/display function.\n"
+        "- Load DB settings from dotenv using only: load_dotenv(os.environ.get('KOOPLEX_CONFIG_ENV_PATH', 'config.env')).\n"
+        "- If a pandas DataFrame named df already exists, use it directly and do not re-query the database.\n"
+        "- If df is missing, query the database with SQLAlchemy using DB_TYPE-aware connection string.\n"
+        "- Use this pattern (replacing SQL_QUERY and plotting details):\n"
         "  from sqlalchemy import create_engine, text\n"
+        "  from urllib.parse import quote_plus\n"
         "  import os\n"
         "  import pandas as pd\n"
         "  from dotenv import load_dotenv\n"
@@ -379,13 +389,14 @@ def _plotting_runtime_instruction() -> str:
         "  db_password = _ge('DB_PASSWORD', '')\n"
         "  db_type = _ge('DB_TYPE', 'postgresql')\n"
         "  if db_type == 'mssql':\n"
-        "    connectionstring = f'mssql+pymssql://{db_user}:{db_password}@{hostname}:{port}/{database}'\n"
+        "    connectionstring = f'mssql+pymssql://{quote_plus(db_user)}:{quote_plus(db_password)}@{hostname}:{port}/{database}'\n"
         "  else:\n"
-        "    connectionstring = f'postgresql+psycopg2://{db_user}:{db_password}@{hostname}:{port}/{database}'\n"
-        "  engine = create_engine(connectionstring)\n"
-        "  df = pd.read_sql(text(SQL_QUERY), engine, params={})\n"
-        "- Replace SQL_QUERY with the actual SQL that answers the user's question.\n"
-        "- Build a Plotly figure and assign it to variable `fig`.\n"
+        "    connectionstring = f'postgresql+psycopg2://{quote_plus(db_user)}:{quote_plus(db_password)}@{hostname}:{port}/{database}'\n"
+        "  if 'df' not in locals() or not isinstance(df, pd.DataFrame):\n"
+        "    engine = create_engine(connectionstring)\n"
+        "    df = pd.read_sql(text(SQL_QUERY), engine, params={})\n"
+        "- Replace SQL_QUERY with the actual SQL that answers the user's question when fallback query is needed.\n"
+        "- Build a Plotly figure and assign it to variable fig.\n"
         "- Return code in a single Python code block without explanation around it."
     )
 
@@ -461,7 +472,7 @@ def _build_initial_system_message(db_chat, db_source, table_name_filter: str = "
         system_parts.append(str(instruction))
     if not system_parts:
         system_parts.append(default_instruction)
-    # system_parts.append(plotting_runtime_instruction)
+    system_parts.append(plotting_runtime_instruction)
     return "\n\n".join(system_parts)
 
 
