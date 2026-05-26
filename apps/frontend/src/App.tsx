@@ -392,6 +392,11 @@ function App() {
   }, [view])
 
   useEffect(() => {
+    if (view !== 'search-knowledge') return
+    void loadVectorstoreStats()
+  }, [view])
+
+  useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
       const state = rightSidebarResizeRef.current
       if (!state.active) return
@@ -1514,7 +1519,7 @@ function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <h1>KooplexQuery Migration UI</h1>
+        <h1>KooplexQuery AI Assisted Database Explorer</h1>
         <div className="active-badge">Active: {activeSummary}</div>
       </header>
 
@@ -2220,10 +2225,13 @@ function App() {
         {view === 'search-knowledge' && (
           <section>
             <h2>Search Knowledge</h2>
-            <div className="row-actions">
-              <button disabled={loading} onClick={loadVectorstoreStats}>📂 Load vectorstore stats</button>
-            </div>
-
+            <p>
+              {Object.entries(vectorStats).length > 0
+                ? Object.entries(vectorStats)
+                    .map(([collection, count]) => `${collection}: ${count}`)
+                    .join(' | ')
+                : 'No vectorstore stats loaded.'}
+            </p>
             <fieldset>
               <legend>Vectorstore</legend>
               <label>Search query
@@ -2257,7 +2265,7 @@ function App() {
                 <button disabled={loading} onClick={resyncVectorstore}>Resync vectorstore</button>
                 <button disabled={loading} className="danger" onClick={resetVectorstore}>Reset vectorstore</button>
               </div>
-              <pre>{JSON.stringify(vectorStats, null, 2)}</pre>
+              
             </fieldset>
 
             <article>

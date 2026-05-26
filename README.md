@@ -1,3 +1,8 @@
+New part
+
+## Setup database connections
+
+
 # kooplexQuery
 Text2SQL solutions for any SQL database, built with Streamlit and Langchain.
 

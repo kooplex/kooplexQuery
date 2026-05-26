@@ -134,6 +134,131 @@ def get_vectorstore():
     return VectorStore(persist_directory=str(persist_dir))
 
 
+def _vectorstore_collection_count(vs, collection_name: str) -> int:
+    try:
+        collection = vs.chroma_client.get_or_create_collection(collection_name)
+        return int(collection.count())
+    except Exception:
+        return 0
+
+
+def get_vectorstore_collection_counts(vs=None) -> dict[str, int]:
+    store = vs or get_vectorstore()
+    return {
+        name: _vectorstore_collection_count(store, name)
+        for name in store.get_collections()
+    }
+
+
+def sync_vectorstore_from_sources(vs=None, db_chat=None, db_source=None, clear_first: bool = False) -> dict[str, int]:
+    store = vs or get_vectorstore()
+    chat = db_chat or get_db_chat()
+    source = db_source or get_db_source()
+
+    if clear_first:
+        store.reset()
+
+    # Sync validated training examples.
+    keys, rows = chat.fetch_all_examples()
+    examples = [dict(zip(keys, row)) for row in rows]
+    for item in examples:
+        if item.get("type") == "train" and item.get("public"):
+            question = str(item.get("question_content") or "").strip()
+            sql = str(item.get("sql") or "").strip()
+            if not question or not sql:
+                continue
+            store.add_to_examples(
+                {
+                    "question": question,
+                    "sql": sql,
+                }
+            )
+
+    # Sync source DB metadata.
+    for table_name, table_desc in source.describe_tables() or ():
+        text_value = str(table_desc or table_name or "").strip()
+        if not text_value:
+            continue
+        store.add_to_docs(
+            texts=[text_value],
+            metadatas=[{"Table": str(table_name), "type": "table_description"}],
+        )
+
+    for row in source.describe_columns() or ():
+        text_value = " - ".join(str(v) for v in row if v is not None).strip()
+        if not text_value:
+            continue
+        store.add_to_docs(
+            texts=[text_value],
+            metadatas=[{"Column": str(row[1]), "type": "column_description"}],
+        )
+
+    # Sync all knowledge docs.
+    k_keys, k_rows = chat.fetch_all_knowledge()
+    knowledge_items = [dict(zip(k_keys, row)) for row in k_rows]
+    for item in knowledge_items:
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        store.add_to_docs(
+            texts=[content],
+            metadatas=[{"Reference": str(item.get("reference") or ""), "type": "knowledge"}],
+        )
+
+    return get_vectorstore_collection_counts(store)
+
+
+def ensure_vectorstore_seeded(vs=None, db_chat=None, db_source=None) -> dict[str, int]:
+    store = vs or get_vectorstore()
+    counts = get_vectorstore_collection_counts(store)
+    if any(counts.values()):
+        return counts
+    return sync_vectorstore_from_sources(store, db_chat=db_chat, db_source=db_source)
+
+
+def build_rag_context_from_vectorstore(
+    query: str,
+    vs=None,
+    db_chat=None,
+    db_source=None,
+    max_items_per_collection: int = 3,
+) -> str:
+    user_query = (query or "").strip()
+    if not user_query:
+        return ""
+
+    try:
+        store = vs or get_vectorstore()
+        ensure_vectorstore_seeded(store, db_chat=db_chat, db_source=db_source)
+    except Exception as exc:
+        logger.info("Vectorstore unavailable for RAG context: %s", exc)
+        return ""
+
+    snippets: list[str] = []
+    per_collection = max(1, max_items_per_collection)
+
+    for collection_name in store.get_collections():
+        try:
+            coll = store._init_db(collection_name=collection_name)
+            if coll is None:
+                continue
+            results = coll.similarity_search_with_score(user_query, k=per_collection)
+        except Exception:
+            continue
+
+        for doc, score in results:
+            text_value = str(getattr(doc, "page_content", "") or "").strip()
+            if not text_value:
+                continue
+            compact = " ".join(text_value.split())
+            snippets.append(f"[{collection_name} | score={float(score):.4f}] {compact[:900]}")
+
+    if not snippets:
+        return ""
+
+    return "## Retrieved similar context (RAG)\n" + "\n".join(f"- {line}" for line in snippets[:12])
+
+
 def model_registry_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "llm_models.sqlite3"
 
@@ -698,6 +823,15 @@ async def stream_chat_chunks(
     )
     if initial_system_message:
         motor._chat_history.add_system_message(initial_system_message)
+
+    rag_context = build_rag_context_from_vectorstore(
+        query=prompt,
+        vs=None,
+        db_chat=motor.db_chat,
+        db_source=motor.db_source,
+    )
+    if rag_context:
+        motor._chat_history.add_system_message(rag_context)
 
     motor._chat_history.add_user_message(prompt, metadata={"model": motor.current_model})
 
