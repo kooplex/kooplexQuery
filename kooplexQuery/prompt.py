@@ -80,6 +80,15 @@ def prompt():
         st.markdown("These variables will be saved into the `config.env` file and loaded on the next startup to initialize the Motor. After setting these, please restart the app.")
         env_vars = {
             "OPENAI_API_KEY": {"value": "OpenAI API key", "type": "password"},
+            "AZURE_API_KEY": {"value": "Azure API key", "type": "password"},
+            "AZURE_BASE_URL": {"value": "Azure endpoint", "type": "default"},
+            "AZURE_API_VERSION": {"value": "Azure API version", "type": "default"},
+            "AZURE_ANTHROPIC_API_KEY": {"value": "Azure Anthropic API key", "type": "password"},
+            "AZURE_ANTHROPIC_BASE_URL": {"value": "Azure Anthropic base URL", "type": "default"},
+            "AZURE_ANTHROPIC_MAX_TOKENS": {"value": "Azure Anthropic max tokens", "type": "default"},
+            "AZURE_OPENAI_API_KEY": {"value": "Azure OpenAI API key", "type": "password"},
+            "AZURE_OPENAI_ENDPOINT": {"value": "Azure OpenAI endpoint", "type": "default"},
+            "AZURE_OPENAI_API_VERSION": {"value": "Azure OpenAI API version", "type": "default"},
             "OLLAMA_HOST": {"value": "Ollama host", "type": "default"},
             "OLLAMA_PORT": {"value": "Ollama port", "type": "default"},
             "OLLAMA_MODEL": {"value": "Ollama model", "type": "default"},
@@ -526,7 +535,28 @@ def prompt():
                 add_model_requested = st.form_submit_button("Add model")
             if add_model_requested:
                 try:
-                    added_model = add_llm_model(new_model_name, new_model_provider)
+                    normalized_model_name = (new_model_name or "").strip()
+                    effective_provider = (new_model_provider or "").strip()
+                    if (
+                        not effective_provider
+                        and normalized_model_name.startswith("gpt-")
+                        and (
+                            (os.getenv("AZURE_FOUNDRY_API_KEY", "").strip() and os.getenv("AZURE_FOUNDRY_URL", "").strip())
+                            or (os.getenv("AZURE_API_KEY", "").strip() and os.getenv("AZURE_BASE_URL", "").strip())
+                            or (os.getenv("AZURE_OPENAI_API_KEY", "").strip() and os.getenv("AZURE_OPENAI_ENDPOINT", "").strip())
+                        )
+                    ):
+                        effective_provider = "azure-openai"
+                    elif (
+                        not effective_provider
+                        and normalized_model_name.startswith("claude-")
+                        and (
+                            (os.getenv("AZURE_ANTHROPIC_API_KEY", "").strip() and os.getenv("AZURE_ANTHROPIC_BASE_URL", "").strip())
+                            or (os.getenv("AZURE_API_KEY", "").strip() and os.getenv("AZURE_ANTHROPIC_BASE_URL", "").strip())
+                        )
+                    ):
+                        effective_provider = "azure-anthropic"
+                    added_model = add_llm_model(new_model_name, effective_provider)
                 except ValueError as exc:
                     st.warning(str(exc))
                 else:

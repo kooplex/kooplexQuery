@@ -32,6 +32,16 @@ class Content_Chunk:
     type: str
     content: str
 
+
+@dataclass
+class _TextChunk:
+    content: str
+
+
+@dataclass
+class _TextResponse:
+    content: str
+
 if not os.getenv('DEFAULT_LLM_MODEL') and not os.getenv('DEFAULT_LLM_PROVIDER'):
     logger.warning("No default LLM model or provider set in environment variables. Using fallback default: gpt-4.1-mini from openai. Set DEFAULT_LLM_MODEL and DEFAULT_LLM_PROVIDER to change this.")
 DEFAULT_LLM = LLM_Model(
@@ -60,9 +70,149 @@ def is_provider_url(provider: str) -> bool:
     return bool(re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', provider))
 
 
+def _looks_like_azure_openai_url(url: str) -> bool:
+    candidate = (url or '').strip()
+    if not candidate:
+        return False
+
+    configured = _ge(
+        'AZURE_FOUNDRY_URL',
+        _ge('AZURE_BASE_URL', _ge('AZURE_OPENAI_ENDPOINT', '')),
+    ).strip()
+
+    def _normalize(raw: str) -> str:
+        value = (raw or '').strip().rstrip('/')
+        if value.endswith('/openai'):
+            value = value[:-len('/openai')]
+        return value
+
+    candidate_norm = _normalize(candidate)
+    configured_norm = _normalize(configured)
+    if configured_norm and (candidate_norm == configured_norm or candidate_norm.startswith(configured_norm) or configured_norm.startswith(candidate_norm)):
+        return True
+
+    try:
+        parsed = urlparse(candidate_norm)
+        host = (parsed.hostname or '').lower()
+    except Exception:
+        host = ''
+    return host.endswith('.services.ai.azure.com') or host.endswith('.openai.azure.com')
+
+
+def _has_azure_openai_config() -> bool:
+    return bool(
+        _ge('AZURE_FOUNDRY_API_KEY', _ge('AZURE_API_KEY', _ge('AZURE_OPENAI_API_KEY', ''))).strip()
+        and _ge('AZURE_FOUNDRY_URL', _ge('AZURE_BASE_URL', _ge('AZURE_OPENAI_ENDPOINT', ''))).strip()
+    )
+
+
+def _has_azure_anthropic_config() -> bool:
+    return bool(
+        _ge('AZURE_ANTHROPIC_API_KEY', _ge('AZURE_API_KEY', _ge('ANTHROPIC_API_KEY', ''))).strip()
+        and _ge('AZURE_ANTHROPIC_BASE_URL', '').strip()
+    )
+
+
+class _AzureAnthropicAdapter:
+    def __init__(self, model_name: str):
+        try:
+            import importlib
+            Anthropic = importlib.import_module('anthropic').Anthropic
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "Provider 'azure-anthropic' requires the 'anthropic' package. "
+                "Install it in your runtime environment, e.g. pip install anthropic."
+            ) from exc
+
+        self.model_name = model_name
+        self.api_key = _ge('AZURE_ANTHROPIC_API_KEY', _ge('AZURE_API_KEY', _ge('ANTHROPIC_API_KEY', ''))).strip()
+        self.base_url = _ge('AZURE_ANTHROPIC_BASE_URL', '').strip()
+        self.max_tokens = int(_ge('AZURE_ANTHROPIC_MAX_TOKENS', '1024'))
+
+        if not self.api_key or not self.base_url:
+            raise ValueError(
+                "Provider 'azure-anthropic' requires AZURE_ANTHROPIC_BASE_URL and "
+                "AZURE_ANTHROPIC_API_KEY (or AZURE_API_KEY)."
+            )
+
+        self.client = Anthropic(base_url=self.base_url, api_key=self.api_key)
+
+    def _to_messages(self, payload):
+        if isinstance(payload, str):
+            return '', [{'role': 'user', 'content': payload}]
+
+        system_parts = []
+        messages = []
+        for msg in payload:
+            mtype = getattr(msg, 'type', None)
+            content = getattr(msg, 'content', '')
+            if isinstance(content, list):
+                content = ''.join(str(part) for part in content)
+            content = str(content or '')
+            if not content:
+                continue
+            if mtype == 'system':
+                system_parts.append(content)
+            elif mtype in {'ai', 'assistant'}:
+                messages.append({'role': 'assistant', 'content': content})
+            else:
+                messages.append({'role': 'user', 'content': content})
+        if not messages:
+            messages = [{'role': 'user', 'content': 'Hello'}]
+        return '\n\n'.join(system_parts), messages
+
+    def _invoke_sync(self, payload) -> str:
+        system, messages = self._to_messages(payload)
+        kwargs = {
+            'model': self.model_name,
+            'max_tokens': self.max_tokens,
+            'messages': messages,
+        }
+        if system:
+            kwargs['system'] = system
+        response = self.client.messages.create(**kwargs)
+        parts = []
+        for block in getattr(response, 'content', []) or []:
+            text = getattr(block, 'text', None)
+            if text:
+                parts.append(text)
+        return ''.join(parts)
+
+    async def ainvoke(self, payload):
+        text = await asyncio.to_thread(self._invoke_sync, payload)
+        return _TextResponse(content=text)
+
+    async def astream(self, payload):
+        text = await asyncio.to_thread(self._invoke_sync, payload)
+        yield _TextChunk(content=text)
+
+
+def _normalize_model_provider(provider: str | None, model_name: str | None = None) -> str:
+    normalized_provider = (provider or '').strip()
+    if not normalized_provider:
+        if model_name and model_name.startswith('gpt-'):
+            return 'azure-openai' if _has_azure_openai_config() else 'openai'
+        if model_name and model_name.startswith('claude-'):
+            return 'azure-anthropic' if _has_azure_anthropic_config() else 'anthropic'
+        return _normalize_ollama_base_url()
+
+    lowered = normalized_provider.lower()
+    if lowered in {'azure', 'azure-openai', 'azure-openai-foundry'}:
+        return 'azure-openai'
+    if lowered in {'azure-anthropic', 'anthropic-azure', 'azure-claude'}:
+        return 'azure-anthropic'
+    if is_provider_url(normalized_provider):
+        if model_name and model_name.startswith('gpt-') and _has_azure_openai_config() and _looks_like_azure_openai_url(normalized_provider):
+            return 'azure-openai'
+        return _normalize_ollama_base_url(normalized_provider)
+    return normalized_provider
+
+
 def default_provider_for_model(model_name: str) -> str:
     if model_name.startswith('gpt-'):
-        return 'openai'
+        return 'azure-openai' if _has_azure_openai_config() else 'openai'
+    if model_name.startswith('claude-'):
+        return 'azure-anthropic' if _has_azure_anthropic_config() else 'anthropic'
     return _normalize_ollama_base_url()
 
 
@@ -98,16 +248,20 @@ def list_llm_models() -> List[LLM_Model]:
             ORDER BY CASE WHEN provider = 'openai' THEN 0 ELSE 1 END, LOWER(model_name)
             """
         ).fetchall()
-    return [LLM_Model(provider=provider, model_name=model_name) for provider, model_name in rows]
+    return [
+        LLM_Model(
+            provider=_normalize_model_provider(provider, model_name),
+            model_name=model_name,
+        )
+        for provider, model_name in rows
+    ]
 
 
 def add_llm_model(model_name: str, provider: str | None = None) -> LLM_Model:
     normalized_name = model_name.strip()
     if not normalized_name:
         raise ValueError('Model name cannot be empty.')
-    normalized_provider = provider.strip() if provider else default_provider_for_model(normalized_name)
-    if is_provider_url(normalized_provider):
-        normalized_provider = _normalize_ollama_base_url(normalized_provider)
+    normalized_provider = _normalize_model_provider(provider, normalized_name)
     db_path = _ensure_llm_models_db()
     with sqlite3.connect(db_path) as con:
         con.execute(
@@ -148,7 +302,11 @@ def delete_llm_model(model_name: str, provider: str | None = None) -> bool:
 
 def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
     if isinstance(model, LLM_Model):
-        return model
+        normalized_model_name = (model.model_name or '').strip()
+        if not normalized_model_name:
+            return DEFAULT_LLM
+        normalized_provider = _normalize_model_provider(model.provider, normalized_model_name)
+        return LLM_Model(provider=normalized_provider, model_name=normalized_model_name)
 
     # Streamlit/session objects may carry model-like instances that are not the
     # exact LLM_Model class identity in this module; normalize by attributes.
@@ -158,11 +316,7 @@ def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
         normalized_model_name = str(model_name_attr).strip()
         if not normalized_model_name:
             return DEFAULT_LLM
-        normalized_provider = (
-            str(provider_attr).strip() if provider_attr else default_provider_for_model(normalized_model_name)
-        )
-        if is_provider_url(normalized_provider):
-            normalized_provider = _normalize_ollama_base_url(normalized_provider)
+        normalized_provider = _normalize_model_provider(provider_attr, normalized_model_name)
         return LLM_Model(provider=normalized_provider, model_name=normalized_model_name)
 
     if not model:
@@ -179,7 +333,10 @@ def resolve_llm_model(model: str | LLM_Model | None) -> LLM_Model:
             (normalized_model_name,),
         ).fetchone()
     if row is not None:
-        return LLM_Model(provider=row[0], model_name=row[1])
+        return LLM_Model(
+            provider=_normalize_model_provider(row[0], row[1]),
+            model_name=row[1],
+        )
     return LLM_Model(
         provider=default_provider_for_model(normalized_model_name),
         model_name=normalized_model_name,
@@ -248,19 +405,70 @@ class Motor(object):
             or self._llm_agent is None
         )
         if needs_init:
-            from langchain_openai import ChatOpenAI
-            logger.info (f"Changed to model {model_name}")
-            self._model=model_name
+            from langchain_openai import AzureChatOpenAI, ChatOpenAI
+            logger.info(f"Changed to model {model_name}")
+            self._model = model_name
             self._model_provider = resolved_model.provider
             if is_provider_url(resolved_model.provider):
                 ollama_base_url = _normalize_ollama_base_url(resolved_model.provider)
                 self._llm_agent = ChatOpenAI(
-                        temperature=0, api_key=lambda: "fdsfs", streaming=True,
-                        model=model_name, base_url=ollama_base_url)
+                    temperature=0,
+                    api_key=lambda: "fdsfs",
+                    streaming=True,
+                    model=model_name,
+                    base_url=ollama_base_url,
+                )
                 logger.info(f"Ollama API base set to {ollama_base_url} for model {model_name}")
+            elif resolved_model.provider in {'azure-openai', 'azure'}:
+                from pydantic import SecretStr
+
+                azure_endpoint = _ge(
+                    'AZURE_FOUNDRY_URL',
+                    _ge('AZURE_BASE_URL', _ge('AZURE_OPENAI_ENDPOINT', '')),
+                ).strip()
+                api_key = _ge(
+                    'AZURE_FOUNDRY_API_KEY',
+                    _ge('AZURE_API_KEY', _ge('AZURE_OPENAI_API_KEY', '')),
+                ).strip()
+                api_version = _ge(
+                    'AZURE_FOUNDRY_API_VERSION',
+                    _ge('AZURE_API_VERSION', _ge('AZURE_OPENAI_API_VERSION', '2025-04-01-preview')),
+                ).strip()
+                if not azure_endpoint or not api_key:
+                    raise ValueError(
+                        'Azure provider requires AZURE_FOUNDRY_URL and AZURE_FOUNDRY_API_KEY '
+                        'or AZURE_BASE_URL and AZURE_API_KEY '
+                        'or AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY.'
+                    )
+                self._llm_agent = AzureChatOpenAI(
+                    temperature=0,
+                    api_key=SecretStr(api_key),
+                    azure_endpoint=azure_endpoint,
+                    api_version=api_version,
+                    streaming=True,
+                    azure_deployment=model_name,
+                    model=model_name,
+                )
+                logger.info(
+                    'Azure OpenAI endpoint set to %s for model %s using api version %s',
+                    azure_endpoint,
+                    model_name,
+                    api_version,
+                )
+            elif resolved_model.provider == 'azure-anthropic':
+                self._llm_agent = _AzureAnthropicAdapter(model_name=model_name)
+                logger.info(
+                    'Azure Anthropic base URL set to %s for model %s',
+                    _ge('AZURE_ANTHROPIC_URL', ''),
+                    model_name,
+                )
             else:
                 self._llm_agent = ChatOpenAI(
-                    temperature=0, api_key=lambda: _ge("OPENAI_API_KEY", "fdsfs"), streaming=True, model=model_name)
+                    temperature=0,
+                    api_key=lambda: _ge("OPENAI_API_KEY", "fdsfs"),
+                    streaming=True,
+                    model=model_name,
+                )
 
     @property
     def sql(self):
